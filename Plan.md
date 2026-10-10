@@ -24,4 +24,6 @@ Predictions - monte carlo modelling
 
 Risk - dont know shit rn ( beta ? )
 
+Ideas:
 
+create a dividend adjuste curve for dividend stocks (i.e. revinvesting the profits once distributed)
