@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.3.3",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.4",
     "sqlalchemy>=2.0.54",
     "uvicorn[standard]>=0.54.0",
     "yfinance>=1.7.0",
