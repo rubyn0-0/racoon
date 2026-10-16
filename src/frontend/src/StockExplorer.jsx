@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Plot from 'react-plotly.js'
 import { fetchPrices } from './api'
-import { aggregatePrices } from './prices'
+import ChartHeader from './ChartHeader'
+import { averageWindows, theme } from './chartTheme'
+import OptionButtons from './OptionButtons'
+import PriceChart from './PriceChart'
 
-const chartModes = [
-  { id: 'free-pan', label: 'Free pan' },
-  { id: 'full-range', label: 'Full range' },
-  { id: 'fitted', label: 'Fitted' },
+const chartTypes = [
+  { id: 'candles', label: 'Candles' },
+  { id: 'line', label: 'Line' },
 ]
 const priceIntervals = [
   { id: 'day', label: 'Day' },
@@ -14,34 +15,36 @@ const priceIntervals = [
   { id: 'month', label: 'Month' },
   { id: 'year', label: 'Year' },
 ]
-const chartColors = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c']
+const chartModes = [
+  { id: 'free-pan', label: 'Free pan' },
+  { id: 'full-range', label: 'Full range' },
+  { id: 'fitted', label: 'Fitted' },
+]
+const averageOptions = averageWindows.map((window) => ({ id: window, label: `MA ${window}` }))
+const periods = [
+  { id: '1M', label: '1M', months: 1 },
+  { id: '3M', label: '3M', months: 3 },
+  { id: '6M', label: '6M', months: 6 },
+  { id: '1Y', label: '1Y', months: 12 },
+  { id: 'YTD', label: 'YTD' },
+  { id: '5Y', label: '5Y', months: 60 },
+  { id: 'max', label: 'Max' },
+]
 
-function OptionButtons({ label, options, isActive, onSelect }) {
-  return (
-    <div className="chart-option-group">
-      <span>{label}</span>
-      <div className="chart-mode-buttons">
-        {options.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className={isActive(option.id) ? 'chart-mode-button active' : 'chart-mode-button'}
-            aria-pressed={isActive(option.id)}
-            onClick={() => onSelect(option.id)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
+function periodStart(period, endDate, earliestDate) {
+  if (period.id === 'max') return earliestDate
+  if (period.id === 'YTD') return `${endDate.slice(0, 4)}-01-01`
+
+  const date = new Date(`${endDate}T00:00:00Z`)
+  date.setUTCMonth(date.getUTCMonth() - period.months)
+  return date.toISOString().slice(0, 10)
 }
 
 function StockExplorer({ stocks }) {
   const initialStock = stocks[0]
-  const chartColorsByTicker = useMemo(
+  const colorsByTicker = useMemo(
     () => Object.fromEntries(
-      stocks.map((stock, index) => [stock.ticker, chartColors[index % chartColors.length]]),
+      stocks.map((stock, index) => [stock.ticker, theme.lines[index % theme.lines.length]]),
     ),
     [stocks],
   )
@@ -49,7 +52,6 @@ function StockExplorer({ stocks }) {
   const [startDate, setStartDate] = useState(initialStock.start_date)
   const [endDate, setEndDate] = useState(initialStock.end_date)
   const [selection, setSelection] = useState({
-    ticker: initialStock.ticker,
     startDate: initialStock.start_date,
     endDate: initialStock.end_date,
   })
@@ -57,66 +59,46 @@ function StockExplorer({ stocks }) {
     initialStock.start_date,
     initialStock.end_date,
   ])
-  const [chartMode, setChartMode] = useState('full-range')
+  const [chartType, setChartType] = useState('candles')
+  const [chartMode, setChartMode] = useState('fitted')
   const [priceInterval, setPriceInterval] = useState('day')
+  const [averages, setAverages] = useState([])
+  const [showVolume, setShowVolume] = useState(false)
   const [graphTickers, setGraphTickers] = useState([initialStock.ticker])
-  const [pricesByTicker, setPricesByTicker] = useState({})
+  const [seriesByKey, setSeriesByKey] = useState({})
   const [error, setError] = useState('')
   const requests = useRef({})
 
-  // Each stock's price history is looked up from the API once, then reused.
-  function ensurePrices(nextTicker) {
-    requests.current[nextTicker] ??= fetchPrices(nextTicker)
+  // Each stock and interval is looked up from the API once, then reused.
+  function ensureSeries(nextTicker, interval) {
+    const key = `${nextTicker}:${interval}`
+
+    requests.current[key] ??= fetchPrices(nextTicker, interval)
       .then((prices) => {
-        setPricesByTicker((current) => ({ ...current, [nextTicker]: prices }))
+        setSeriesByKey((current) => ({ ...current, [key]: prices }))
         return prices
       })
       .catch((err) => {
-        delete requests.current[nextTicker]
+        delete requests.current[key]
         throw err
       })
 
-    return requests.current[nextTicker]
+    return requests.current[key]
   }
 
   useEffect(() => {
     graphTickers.forEach((graphTicker) => {
-      ensurePrices(graphTicker).catch((err) => setError(`Could not load prices: ${err.message}`))
+      ensureSeries(graphTicker, priceInterval)
+        .catch((err) => setError(`Could not load prices: ${err.message}`))
     })
-  }, [graphTickers])
+  }, [graphTickers, priceInterval])
 
   const selectedStock = stocks.find((stock) => stock.ticker === ticker)
   const graphStocks = stocks.filter((stock) => graphTickers.includes(stock.ticker))
   const chartSeries = graphStocks
-    .filter((stock) => pricesByTicker[stock.ticker])
-    .map((stock) => ({
-      stock,
-      prices: aggregatePrices(pricesByTicker[stock.ticker], priceInterval),
-    }))
-  const displayedPrices = chartSeries.flatMap((series) => series.prices)
-  const visibleStart = new Date(visibleDateRange[0]).getTime()
-  const visibleEnd = new Date(visibleDateRange[1]).getTime()
-  const pricesInVisibleRange = displayedPrices.filter((price) => {
-    const priceDate = new Date(price.date).getTime()
-    return priceDate >= visibleStart && priceDate <= visibleEnd
-  })
-  const adaptivePrices = pricesInVisibleRange.length > 0 ? pricesInVisibleRange : displayedPrices
-  const pricesInSelectedPeriod = displayedPrices.filter(
-    (price) => price.date >= selection.startDate && price.date <= selection.endDate,
-  )
-  const selectedPeriodPrices = pricesInSelectedPeriod.length > 0
-    ? pricesInSelectedPeriod
-    : adaptivePrices
-  const selectedMinimumPrice = Math.min(...selectedPeriodPrices.map((price) => price.low))
-  const selectedMaximumPrice = Math.max(...selectedPeriodPrices.map((price) => price.high))
-  const selectedPadding = Math.max(
-    (selectedMaximumPrice - selectedMinimumPrice) * 0.1,
-    selectedMaximumPrice * 0.02,
-  )
-  const minimumPrice = Math.min(...adaptivePrices.map((price) => price.low))
-  const maximumPrice = Math.max(...adaptivePrices.map((price) => price.high))
-  const maximumYAxisPrice = maximumPrice * 1.1
-  const fittedMinimumPrice = Math.max(0, minimumPrice * 0.9)
+    .filter((stock) => seriesByKey[`${stock.ticker}:${priceInterval}`])
+    .map((stock) => ({ stock, prices: seriesByKey[`${stock.ticker}:${priceInterval}`] }))
+  const comparing = graphStocks.length > 1
   const earliestChartDate = graphStocks.reduce(
     (earliest, stock) => stock.start_date < earliest ? stock.start_date : earliest,
     graphStocks[0].start_date,
@@ -125,45 +107,17 @@ function StockExplorer({ stocks }) {
     (latest, stock) => stock.end_date > latest ? stock.end_date : latest,
     graphStocks[0].end_date,
   )
-  const xRevision = `${selection.startDate}-${selection.endDate}-${chartMode}-${priceInterval}`
-  const yRevision = `${chartMode}-${priceInterval}-${graphTickers.join('-')}`
-
-  const xAxisSettings = {
-    title: 'Date',
-    gridcolor: '#e5e7eb',
-    range: visibleDateRange,
-    ...(chartMode === 'free-pan'
-      ? {}
-      : {
-          minallowed: earliestChartDate,
-          maxallowed: latestChartDate,
-        }),
+  const revision = {
+    x: `${selection.startDate}-${selection.endDate}-${chartMode}-${priceInterval}`,
+    y: `${chartMode}-${priceInterval}-${graphTickers.join('-')}`,
   }
 
-  const yAxisSettings = {
-    title: 'Price (CHF)',
-    gridcolor: '#e5e7eb',
-    ...(chartMode === 'free-pan'
-      ? {
-          range: [
-            Math.max(0, selectedMinimumPrice - selectedPadding),
-            selectedMaximumPrice + selectedPadding,
-          ],
-          fixedrange: false,
-        }
-      : chartMode === 'full-range'
-        ? {
-            range: [0, maximumYAxisPrice],
-            minallowed: 0,
-            maxallowed: maximumYAxisPrice,
-            fixedrange: true,
-          }
-        : {
-            range: [fittedMinimumPrice, maximumYAxisPrice],
-            minallowed: fittedMinimumPrice,
-            maxallowed: maximumYAxisPrice,
-            fixedrange: true,
-          }),
+  function applyRange(start, end) {
+    setStartDate(start)
+    setEndDate(end)
+    setSelection({ startDate: start, endDate: end })
+    setVisibleDateRange([start, end])
+    setError('')
   }
 
   function changeCompany(event) {
@@ -184,23 +138,28 @@ function StockExplorer({ stocks }) {
       return
     }
 
-    let prices
+    // Daily rows answer "is there any trading day in this range", whatever the interval.
+    let dailyPrices
     try {
-      prices = await ensurePrices(ticker)
+      dailyPrices = await ensureSeries(ticker, 'day')
     } catch (err) {
       setError(`Could not load prices: ${err.message}`)
       return
     }
 
-    if (!prices.some((price) => price.date >= startDate && price.date <= endDate)) {
+    if (!dailyPrices.some((price) => price.date >= startDate && price.date <= endDate)) {
       setError('No trading data exists in this date range.')
       return
     }
 
-    setError('')
-    setSelection({ ticker, startDate, endDate })
-    setVisibleDateRange([startDate, endDate])
     setGraphTickers([ticker])
+    applyRange(startDate, endDate)
+  }
+
+  function choosePeriod(periodId) {
+    const period = periods.find((item) => item.id === periodId)
+    const start = periodStart(period, latestChartDate, earliestChartDate)
+    applyRange(start < earliestChartDate ? earliestChartDate : start, latestChartDate)
   }
 
   function toggleGraphStock(nextTicker) {
@@ -217,6 +176,14 @@ function StockExplorer({ stocks }) {
     })
   }
 
+  function toggleAverage(window) {
+    setAverages((current) => (
+      current.includes(window)
+        ? current.filter((item) => item !== window)
+        : [...current, window].sort((a, b) => a - b)
+    ))
+  }
+
   function updateVisibleDateRange(event) {
     const nextStart = event['xaxis.range[0]']
     const nextEnd = event['xaxis.range[1]']
@@ -229,14 +196,9 @@ function StockExplorer({ stocks }) {
   }
 
   return (
-    <main className="app">
-      <header>
-        <p className="eyebrow">RACOON</p>
-        <h1>Stock explorer</h1>
-        <p className="subtitle">Select a company and a period to view its price history.</p>
-      </header>
+    <>
 
-      <form className="controls" onSubmit={loadPrices}>
+      <form className="toolbar" onSubmit={loadPrices}>
         <label>
           Company
           <select value={ticker} onChange={changeCompany}>
@@ -249,7 +211,7 @@ function StockExplorer({ stocks }) {
         </label>
 
         <label>
-          Start date
+          From
           <input
             type="date"
             value={startDate}
@@ -260,7 +222,7 @@ function StockExplorer({ stocks }) {
         </label>
 
         <label>
-          End date
+          To
           <input
             type="date"
             value={endDate}
@@ -270,78 +232,98 @@ function StockExplorer({ stocks }) {
           />
         </label>
 
-        <button type="submit">Load chart</button>
+        <button type="submit" className="primary">Load chart</button>
       </form>
 
       {error && <p className="error" role="alert">{error}</p>}
 
-      <section className="chart-options" aria-label="Chart options">
-        <OptionButtons
-          label="Stocks"
-          options={stocks.map((stock) => ({ id: stock.ticker, label: stock.company }))}
-          isActive={(id) => graphTickers.includes(id)}
-          onSelect={toggleGraphStock}
+      <section className="chart-card" aria-label="Price chart">
+        <ChartHeader
+          series={chartSeries}
+          startDate={selection.startDate}
+          endDate={selection.endDate}
         />
-        <OptionButtons
-          label="Graph view"
-          options={chartModes}
-          isActive={(id) => chartMode === id}
-          onSelect={setChartMode}
-        />
-        <OptionButtons
-          label="Interval"
-          options={priceIntervals}
-          isActive={(id) => priceInterval === id}
-          onSelect={setPriceInterval}
-        />
-      </section>
 
-      <section className="chart-card" aria-label="Stock price chart">
-        <div className="chart-heading">
-          <div>
-            <p className="chart-label">Closing price</p>
-            <h2>{graphStocks.map((stock) => stock.company).join(' · ')}</h2>
-          </div>
-          <p>{selection.startDate} to {selection.endDate} · {priceInterval} interval</p>
+        <div className="chart-controls">
+          <OptionButtons
+            label="Chart type"
+            options={chartTypes}
+            isActive={(id) => chartType === id}
+            onSelect={setChartType}
+            disabled={comparing}
+          />
+          <OptionButtons
+            label="Interval"
+            options={priceIntervals}
+            isActive={(id) => priceInterval === id}
+            onSelect={setPriceInterval}
+          />
+          <OptionButtons
+            label="Moving averages"
+            options={averageOptions}
+            isActive={(id) => averages.includes(id)}
+            onSelect={toggleAverage}
+            disabled={comparing}
+          />
+          <OptionButtons
+            label="Volume"
+            options={[{ id: 'volume', label: 'Volume' }]}
+            isActive={() => showVolume}
+            onSelect={() => setShowVolume((current) => !current)}
+            disabled={comparing}
+          />
+          <OptionButtons
+            label="Price axis"
+            options={chartModes}
+            isActive={(id) => chartMode === id}
+            onSelect={setChartMode}
+          />
         </div>
 
-        {chartSeries.length === 0 ? (
-          <p>Loading prices…</p>
-        ) : (
-          <Plot
-            data={chartSeries.map((series) => (
-              {
-                x: series.prices.map((price) => price.date),
-                y: series.prices.map((price) => price.close),
-                type: 'scatter',
-                mode: 'lines',
-                name: series.stock.company,
-                line: { color: chartColorsByTicker[series.stock.ticker], width: 3 },
-                hovertemplate: '%{x}<br>CHF %{y:.2f}<extra>%{fullData.name}</extra>',
-              }
-            ))}
-            layout={{
-              autosize: true,
-              height: 420,
-              margin: { l: 54, r: 24, t: 20, b: 48 },
-              paper_bgcolor: 'white',
-              plot_bgcolor: 'white',
-              dragmode: 'pan',
-              uirevision: xRevision,
-              xaxis: { ...xAxisSettings, uirevision: xRevision },
-              yaxis: { ...yAxisSettings, uirevision: yRevision },
-              showlegend: chartSeries.length > 1,
-              legend: { orientation: 'h', x: 0, y: 1.08 },
-            }}
-            config={{ responsive: true, displaylogo: false, scrollZoom: true }}
-            style={{ width: '100%' }}
-            onRelayout={updateVisibleDateRange}
-          />
+        {comparing && (
+          <p className="hint">
+            Candles, moving averages and volume work with one stock. Deselect the others to use them.
+          </p>
         )}
-      </section>
 
-      <p className="note">Prices are looked up from the database through the FastAPI backend.</p>
-    </main>
+        <div className="chart-frame">
+          {chartSeries.length === 0 ? (
+            <p className="chart-loading">Loading prices…</p>
+          ) : (
+            <PriceChart
+              series={chartSeries}
+              interval={priceInterval}
+              chartType={chartType}
+              averages={averages}
+              showVolume={showVolume}
+              chartMode={chartMode}
+              visibleDateRange={visibleDateRange}
+              selection={selection}
+              earliestDate={earliestChartDate}
+              latestDate={latestChartDate}
+              revision={revision}
+              colorFor={(graphTicker) => colorsByTicker[graphTicker]}
+              onRelayout={updateVisibleDateRange}
+            />
+          )}
+        </div>
+
+        <div className="chart-footer">
+          <OptionButtons
+            label="Period"
+            options={periods}
+            onSelect={choosePeriod}
+          />
+          <OptionButtons
+            label="Stocks"
+            showLabel
+            options={stocks.map((stock) => ({ id: stock.ticker, label: stock.company }))}
+            isActive={(id) => graphTickers.includes(id)}
+            onSelect={toggleGraphStock}
+          />
+        </div>
+      </section>
+    </>
   )
 }
 

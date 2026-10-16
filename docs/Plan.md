@@ -10,7 +10,7 @@ analysis tools: Moving averages, period setting, trading volumes?
 
 sthg to represent indexes, build your own portfolio :
     may automatically assign shares like an indexes
-    may determine shares yoursel
+    may determine shares yourself
 the portfolio should be backtestable
 
 Adressing: dividends? continuous investment (per month, net new money (NNM))

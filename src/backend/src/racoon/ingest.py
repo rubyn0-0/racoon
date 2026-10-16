@@ -11,12 +11,13 @@ TICKERS_FILE = BACKEND_DIR / "data" / "six_stocks_tickers.csv"
 DEFAULT_TICKERS = ["ABBN.SW", "NESN.SW", "NOVN.SW"]
 
 UPSERT_COMPANY = text("""
-    INSERT INTO companies (ticker, name, exchange, country)
-    VALUES (:ticker, :name, :exchange, :country)
+    INSERT INTO companies (ticker, name, exchange, country, market_cap)
+    VALUES (:ticker, :name, :exchange, :country, :market_cap)
     ON CONFLICT (ticker) DO UPDATE SET
         name = EXCLUDED.name,
         exchange = EXCLUDED.exchange,
-        country = EXCLUDED.country
+        country = EXCLUDED.country,
+        market_cap = COALESCE(EXCLUDED.market_cap, companies.market_cap)
 """)
 
 UPSERT_PRICE = text("""
@@ -65,6 +66,8 @@ def fetch_prices(ticker):
         auto_adjust=False,
         actions=True,
     )
+    # A run during trading hours returns today's unfinished session without a close; skip it.
+    data = data.dropna(subset=["Close"])
 
     return [
         {
@@ -83,6 +86,14 @@ def fetch_prices(ticker):
     ]
 
 
+def fetch_market_cap(ticker):
+    """Current market capitalisation (used for SMI-style weights); None if Yahoo has none."""
+    try:
+        return number_or_none(yf.Ticker(ticker).fast_info["marketCap"])
+    except Exception:
+        return None
+
+
 def ingest(tickers):
     companies = load_companies()
     init_db()
@@ -97,11 +108,14 @@ def ingest(tickers):
             print(f"No data found for {ticker}")
             continue
 
+        company = {**companies[ticker], "market_cap": fetch_market_cap(ticker)}
+
         with get_engine().begin() as connection:
-            connection.execute(UPSERT_COMPANY, companies[ticker])
+            connection.execute(UPSERT_COMPANY, company)
             connection.execute(UPSERT_PRICE, prices)
 
-        print(f"{ticker}: stored {len(prices)} rows")
+        cap = f"market cap {company['market_cap']:,.0f}" if company["market_cap"] else "no market cap"
+        print(f"{ticker}: stored {len(prices)} rows, {cap}")
 
 
 if __name__ == "__main__":

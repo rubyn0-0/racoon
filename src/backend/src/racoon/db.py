@@ -50,3 +50,23 @@ def init_db():
                 PRIMARY KEY (ticker, date)
             )
         """))
+        # Added after the first release; existing databases get the column on the next start.
+        connection.execute(text(
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS market_cap DOUBLE PRECISION"
+        ))
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS portfolios (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                weighting TEXT NOT NULL CHECK (weighting IN ('manual', 'equal', 'market_cap')),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """))
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS holdings (
+                portfolio_id INTEGER NOT NULL REFERENCES portfolios (id) ON DELETE CASCADE,
+                ticker VARCHAR(20) NOT NULL REFERENCES companies (ticker),
+                weight DOUBLE PRECISION CHECK (weight > 0),
+                PRIMARY KEY (portfolio_id, ticker)
+            )
+        """))
