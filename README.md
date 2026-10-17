@@ -9,10 +9,10 @@ docs/                      project notes (Plan.md)
 src/
   backend/                 Python project (uv)
     pyproject.toml, uv.lock, .env.example
-    data/                  seed data (six_stocks_tickers.csv)
+    data/                  the stock list (six_stocks_tickers.csv; in_smi marks the current SMI members)
     src/racoon/
       db.py                the single database handle (DATABASE_URL from src/backend/.env)
-      ingest.py            yfinance -> database
+      loader.py            loads price history from Yahoo on demand, in background jobs
       api.py               FastAPI app
   frontend/                Vite + React + Plotly
     src/
@@ -31,8 +31,8 @@ src/
 ## Setup
 1. `cd src/backend`, copy `.env.example` to `.env` and fill in `DATABASE_URL`.
 2. `uv sync`
-3. `uv run python -m racoon.ingest` (default: ABB, Nestlé, Novartis; or pass yahoo tickers from the CSV)
-   Re-run it after updating: it also loads each company's share count, which the "% of company" portfolio weighting needs.
+3. Nothing to load up front: the stock list comes from the CSV, and a stock's history (from 2000) is fetched from Yahoo
+   the first time the explorer or a portfolio needs it, with a progress message. Nothing is ever loaded before it is asked for.
 4. `cd src/frontend; npm install`
 
 ## Run
@@ -55,12 +55,15 @@ Health check: http://localhost:8000/api/health
   Weighting is `equal`, `manual` (your weights, scaled to 100%) or `market_cap`
   (SMI style: by market cap, max 20% per stock once there are 5 or more stocks).
 - `POST /api/portfolios/weights`: resulting weights for an unsaved draft.
-- `GET /api/portfolios/{id}/backtest?start=&end=&initial=10000&monthly=0&reinvest=true`:
-  buy on day one, add `monthly` CHF on the first trading day of each month, dividends
-  reinvested or kept as cash. Returns the value over time, money paid in vs market return,
-  dividends, largest drop and the holdings at the end.
+- `GET /api/portfolios/{id}/backtest?start=&end=`: runs the portfolio by its own saved rules (starting capital, new
+  money, investing frequency, optional shares already owned) with whole shares and a cash balance.
+- `GET /api/portfolios/{id}/plan?until=`: what it would buy at the next investing days, at the last close.
+- `GET /api/portfolios/compare?ids=1,2&start=&end=&initial=&inflow=&inflow_frequency=`: several portfolios on the
+  same days with the same money.
+- `POST /api/stocks/ensure` `{tickers}`: starts loading missing prices and reports progress (poll it).
+- `GET /api/prices/on?tickers=&on=`: the close on a day, for valuing a starting position.
 
-Market caps come from the ingest; run it again after updating to load them.
+Market caps and share counts are loaded together with a stock's prices.
 
 ## Tests
 `cd src/backend; uv run pytest`

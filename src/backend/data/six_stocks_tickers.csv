@@ -1,54 +1,54 @@
-ticker,name,exchange,country,yahoo_ticker
-MMM,3M Company,SIX,US,MMM.SW
-ABBN,ABB Ltd,SIX,CH,ABBN.SW
-ABT,Abbott Laboratories,SIX,US,ABT.SW
-ACLN,Accelleron Industries AG,SIX,CH,ACLN.SW
-ADXN,Addex Therapeutics Ltd,SIX,CH,ADXN.SW
-ADEN,Adecco Group AG,SIX,CH,ADEN.SW
-ADVN,Adval Tech Holding AG,SIX,CH,ADVN.SW
-AEVS,AEVIS VICTORIA SA,SIX,CH,AEVS.SW
-ALC,Alcon Inc.,SIX,CH,ALC.SW
-ALLN,Allreal Holding AG,SIX,CH,ALLN.SW
-ALPN,Alpine Select AG,SIX,CH,ALPN.SW
-ALSN,ALSO Holding AG,SIX,CH,ALSN.SW
-AMRZ,Amrize Ltd,SIX,CH,AMRZ.SW
-AMS,ams-OSRAM AG,SIX,AT,AMS.SW
-APGN,APG SGA SA,SIX,CH,APGN.SW
-ARBN,Arbonia AG,SIX,CH,ARBN.SW
-ARYN,ARYZTA AG,SIX,CH,ARYN.SW
-ASCN,Ascom Holding AG,SIX,CH,ASCN.SW
-ASWN,ASMALLWORLD AG,SIX,CH,ASWN.SW
-AUTN,Autoneum Holding AG,SIX,CH,AUTN.SW
-AVOL,Avolta AG,SIX,CH,AVOL.SW
-BANB,Bachem Holding AG,SIX,CH,BANB.SW
-BMAG,Bajaj Mobility AG,SIX,AT,BMAG.SW
-BCGE,Banque Cantonale de Genève,SIX,CH,BCGE.SW
-BCJ,Banque Cantonale du Jura SA,SIX,CH,BCJ.SW
-BCVN,Banque Cantonale Vaudoise,SIX,CH,BCVN.SW
-BARN,Barry Callebaut AG,SIX,CH,BARN.SW
-BLKB,Basellandschaftliche Kantonalbank,SIX,CH,BLKB.SW
-BSLN,Basilea Pharmaceutica AG,SIX,CH,BSLN.SW
-BSKP,Basler Kantonalbank,SIX,CH,BSKP.SW
-GALD,Galderma Group AG,SIX,CH,GALD.SW
-GEBN,Geberit AG,SIX,CH,GEBN.SW
-GIVN,Givaudan SA,SIX,CH,GIVN.SW
-HOLN,Holcim Ltd,SIX,CH,HOLN.SW
-LOGN,Logitech International SA,SIX,CH,LOGN.SW
-LONN,Lonza Group AG,SIX,CH,LONN.SW
-NESN,Nestlé SA,SIX,CH,NESN.SW
-NOVN,Novartis AG,SIX,CH,NOVN.SW
-PGHN,Partners Group Holding AG,SIX,CH,PGHN.SW
-CFR,Compagnie Financière Richemont SA,SIX,CH,CFR.SW
-ROP,Roche Holding AG participation certificate,SIX,CH,ROP.SW
-SDZ,Sandoz Group AG,SIX,CH,SDZ.SW
-SIKA,Sika AG,SIX,CH,SIKA.SW
-SLHN,Swiss Life Holding AG,SIX,CH,SLHN.SW
-SREN,Swiss Re AG,SIX,CH,SREN.SW
-UBSG,UBS Group AG,SIX,CH,UBSG.SW
-ZURN,Zurich Insurance Group AG,SIX,CH,ZURN.SW
-SCHP,Schindler Holding participation certificate,SIX,CH,SCHP.SW
-SGSN,SGS SA,SIX,CH,SGSN.SW
-SOON,Sonova Holding AG,SIX,CH,SOON.SW
-STMN,Straumann Holding AG,SIX,CH,STMN.SW
-SCMN,Swisscom AG,SIX,CH,SCMN.SW
-VACN,VAT Group AG,SIX,CH,VACN.SW
+ticker,name,exchange,country,yahoo_ticker,in_smi
+MMM,3M Company,SIX,US,MMM.SW,N
+ABBN,ABB Ltd,SIX,CH,ABBN.SW,Y
+ABT,Abbott Laboratories,SIX,US,ABT.SW,N
+ACLN,Accelleron Industries AG,SIX,CH,ACLN.SW,N
+ADXN,Addex Therapeutics Ltd,SIX,CH,ADXN.SW,N
+ADEN,Adecco Group AG,SIX,CH,ADEN.SW,N
+ADVN,Adval Tech Holding AG,SIX,CH,ADVN.SW,N
+AEVS,AEVIS VICTORIA SA,SIX,CH,AEVS.SW,N
+ALC,Alcon Inc.,SIX,CH,ALC.SW,Y
+ALLN,Allreal Holding AG,SIX,CH,ALLN.SW,N
+ALPN,Alpine Select AG,SIX,CH,ALPN.SW,N
+ALSN,ALSO Holding AG,SIX,CH,ALSN.SW,N
+AMRZ,Amrize Ltd,SIX,CH,AMRZ.SW,Y
+AMS,ams-OSRAM AG,SIX,AT,AMS.SW,N
+APGN,APG SGA SA,SIX,CH,APGN.SW,N
+ARBN,Arbonia AG,SIX,CH,ARBN.SW,N
+ARYN,ARYZTA AG,SIX,CH,ARYN.SW,N
+ASCN,Ascom Holding AG,SIX,CH,ASCN.SW,N
+ASWN,ASMALLWORLD AG,SIX,CH,ASWN.SW,N
+AUTN,Autoneum Holding AG,SIX,CH,AUTN.SW,N
+AVOL,Avolta AG,SIX,CH,AVOL.SW,N
+BANB,Bachem Holding AG,SIX,CH,BANB.SW,N
+BMAG,Bajaj Mobility AG,SIX,AT,BMAG.SW,N
+BCGE,Banque Cantonale de Genève,SIX,CH,BCGE.SW,N
+BCJ,Banque Cantonale du Jura SA,SIX,CH,BCJ.SW,N
+BCVN,Banque Cantonale Vaudoise,SIX,CH,BCVN.SW,N
+BARN,Barry Callebaut AG,SIX,CH,BARN.SW,N
+BLKB,Basellandschaftliche Kantonalbank,SIX,CH,BLKB.SW,N
+BSLN,Basilea Pharmaceutica AG,SIX,CH,BSLN.SW,N
+BSKP,Basler Kantonalbank,SIX,CH,BSKP.SW,N
+GALD,Galderma Group AG,SIX,CH,GALD.SW,Y
+GEBN,Geberit AG,SIX,CH,GEBN.SW,Y
+GIVN,Givaudan SA,SIX,CH,GIVN.SW,Y
+HOLN,Holcim Ltd,SIX,CH,HOLN.SW,Y
+LOGN,Logitech International SA,SIX,CH,LOGN.SW,Y
+LONN,Lonza Group AG,SIX,CH,LONN.SW,Y
+NESN,Nestlé SA,SIX,CH,NESN.SW,Y
+NOVN,Novartis AG,SIX,CH,NOVN.SW,Y
+PGHN,Partners Group Holding AG,SIX,CH,PGHN.SW,Y
+CFR,Compagnie Financière Richemont SA,SIX,CH,CFR.SW,Y
+ROP,Roche Holding AG participation certificate,SIX,CH,ROP.SW,Y
+SDZ,Sandoz Group AG,SIX,CH,SDZ.SW,Y
+SIKA,Sika AG,SIX,CH,SIKA.SW,Y
+SLHN,Swiss Life Holding AG,SIX,CH,SLHN.SW,Y
+SREN,Swiss Re AG,SIX,CH,SREN.SW,Y
+UBSG,UBS Group AG,SIX,CH,UBSG.SW,Y
+ZURN,Zurich Insurance Group AG,SIX,CH,ZURN.SW,Y
+SCHP,Schindler Holding participation certificate,SIX,CH,SCHP.SW,N
+SGSN,SGS SA,SIX,CH,SGSN.SW,N
+SOON,Sonova Holding AG,SIX,CH,SOON.SW,N
+STMN,Straumann Holding AG,SIX,CH,STMN.SW,N
+SCMN,Swisscom AG,SIX,CH,SCMN.SW,N
+VACN,VAT Group AG,SIX,CH,VACN.SW,N

@@ -12,6 +12,9 @@ const routes = {
   backtest: (id) => `/api/portfolios/${id}/backtest`,
   plan: (id) => `/api/portfolios/${id}/plan`,
   compare: '/api/portfolios/compare',
+  ensure: '/api/stocks/ensure',
+  closesOn: '/api/prices/on',
+  debugLoading: '/api/debug/loading',
 }
 const NO_CONTENT = 204
 
@@ -34,6 +37,22 @@ async function request(path, { method = 'GET', body } = {}) {
 
 export function fetchStocks() {
   return request(routes.stocks)
+}
+
+// Start loading prices that are missing or old, and report progress per stock. Call again to poll.
+export function ensureStocks(tickers) {
+  return request(routes.ensure, { method: 'POST', body: { tickers } })
+}
+
+// TEMPORARY, for TestLoader.jsx: what is really stored per stock, and the last load job.
+export function fetchDebugLoading() {
+  return request(routes.debugLoading)
+}
+
+// The close on (or just before) a day for each ticker: {ticker: close}.
+export function fetchClosesOn(tickers, on) {
+  const query = new URLSearchParams({ tickers: tickers.join(','), on })
+  return request(`${routes.closesOn}?${query}`)
 }
 
 export async function fetchPrices(ticker, interval) {
@@ -60,8 +79,11 @@ export function deletePortfolio(id) {
   return request(routes.portfolio(id), { method: 'DELETE' })
 }
 
-export function fetchBacktest(id, { start, end, initial }) {
-  const query = new URLSearchParams({ start, end, initial })
+// Blank dates mean the full range, so they are left out of the request.
+export function fetchBacktest(id, { start, end }) {
+  const query = new URLSearchParams()
+  if (start) query.set('start', start)
+  if (end) query.set('end', end)
   return request(`${routes.backtest(id)}?${query}`)
 }
 
@@ -74,8 +96,9 @@ export function fetchCompare(ids, { start, end, initial, inflow, inflowFrequency
 }
 
 // What the portfolio would buy at its next investing days, up to `until` (blank = the API default).
-export function fetchPlan(id, { start, initial, until }) {
-  const query = new URLSearchParams({ start, initial })
+export function fetchPlan(id, { start, until }) {
+  const query = new URLSearchParams()
+  if (start) query.set('start', start)
   if (until) query.set('until', until)
   return request(`${routes.plan(id)}?${query}`)
 }

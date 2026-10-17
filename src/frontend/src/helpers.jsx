@@ -1,6 +1,8 @@
 /* eslint-disable react-refresh/only-export-components -- this file also holds the one shared button component */
 // Small tools the screens share: number and date formatting, chart layout pieces, and the button row.
 // Nothing here is a screen. Values to tweak live in settings.js; this file only uses them.
+import { useEffect, useId, useRef, useState } from 'react'
+import { ensureStocks } from './api'
 import {
   AVERAGE_WINDOWS,
   CHART_FONT_SIZE,
@@ -10,10 +12,13 @@ import {
   INFLOW_FREQUENCIES,
   INTERVALS,
   INVEST_FREQUENCIES,
+  LOAD_POLL_MS,
   LOCALE,
   MARGIN_BOTTOM,
   MARGIN_TOP,
+  SEARCH_RESULTS,
   WEIGHTINGS,
+  WINDOW_PADDING,
   theme,
 } from './settings'
 
@@ -209,4 +214,203 @@ export function OptionButtons({ label, options, isActive, onSelect, showLabel = 
       </div>
     </div>
   )
+}
+
+// Loading prices on demand. The backend fetches a stock's history the first time something asks for it.
+// This hook asks (and keeps asking once a second) until every stock is there, then calls `onChange` once
+// so the screen can refresh what it knows about the stocks (dates, sizes) and drop any cached prices.
+export function useStockData(tickers, onChange) {
+  const key = [...new Set(tickers)].sort().join(',')
+  const [status, setStatus] = useState({ key: '', ready: false, done: 0, total: 0, error: '' })
+  const [attempt, setAttempt] = useState(0)
+  const onChangeRef = useRef(onChange)
+
+  useEffect(() => {
+    onChangeRef.current = onChange
+  })
+
+  useEffect(() => {
+    if (!key) return undefined
+
+    let active = true
+    let timer
+    let waited = false
+
+    async function poll() {
+      try {
+        const result = await ensureStocks(key.split(','))
+        if (!active) return
+
+        const states = Object.values(result.states)
+        const failed = states.find((state) => state.state === 'error')
+        const loading = states.some((state) => state.state === 'loading')
+        const refreshing = states.some((state) => state.refreshing)
+        setStatus({ key, ready: !loading && !failed, done: result.done, total: result.total, error: failed?.error ?? '' })
+
+        if (loading || refreshing) {
+          waited = true
+          timer = setTimeout(poll, LOAD_POLL_MS)
+        } else if (waited) {
+          onChangeRef.current?.()
+        }
+      } catch (err) {
+        if (active) setStatus({ key, ready: false, done: 0, total: 0, error: err.message })
+      }
+    }
+
+    poll()
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [key, attempt])
+
+  const retry = () => setAttempt((count) => count + 1)
+  if (!key) return { ready: true, done: 0, total: 0, error: '', retry }
+  return { ...status, ready: status.key === key && status.ready, error: status.key === key ? status.error : '', retry }
+}
+
+// Loads these stocks now and resolves once they are all there. `onProgress` gets the result of every poll,
+// and a failed stock throws. Used by the buttons that need prices (Run backtest, Run comparison, Save).
+export async function waitForStocks(tickers, onProgress) {
+  for (;;) {
+    const result = await ensureStocks(tickers)
+    onProgress?.(result)
+
+    const states = Object.values(result.states)
+    const failed = states.find((state) => state.state === 'error')
+    if (failed) throw new Error(failed.error)
+    if (!states.some((state) => state.state === 'loading')) return result
+
+    await new Promise((resolve) => setTimeout(resolve, LOAD_POLL_MS))
+  }
+}
+
+// The message shown instead of a chart or result while prices are still being fetched.
+export function LoadingNote({ data, what }) {
+  if (data.error) {
+    return (
+      <p className="error" role="alert">
+        Could not load {what}: {data.error}
+        <button type="button" className="quiet" onClick={data.retry}>Try again</button>
+      </p>
+    )
+  }
+
+  return (
+    <p className="chart-loading" role="status">
+      Loading {what}{data.total > 1 ? ` (${data.done} of ${data.total})` : ''}…
+    </p>
+  )
+}
+
+// A search box over the stock list: type a name or ticker, pick from the list (current SMI members first).
+// When closed the box shows the name of the chosen stock; with `clearOnSelect` it empties after a pick.
+export function StockSearch({ stocks, value, onSelect, label, placeholder = 'Search name or ticker', clearOnSelect = false }) {
+  const listId = useId()
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+
+  const chosen = stocks.find((stock) => stock.ticker === value)
+  const needle = query.trim().toLowerCase()
+  const results = stocks
+    .filter((stock) => !needle || stock.company.toLowerCase().includes(needle) || stock.ticker.toLowerCase().includes(needle))
+    .slice(0, SEARCH_RESULTS)
+
+  function pick(stock) {
+    onSelect(stock.ticker)
+    setQuery('')
+    setOpen(false)
+  }
+
+  function onKeyDown(event) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setOpen(true)
+      setActive((index) => Math.min(index + 1, results.length - 1))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActive((index) => Math.max(index - 1, 0))
+    } else if (event.key === 'Enter' && open && results[active]) {
+      event.preventDefault()
+      pick(results[active])
+    } else if (event.key === 'Escape') {
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div className="stock-search">
+      <label className="field">
+        {label}
+        <input
+          type="search"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          autoComplete="off"
+          placeholder={placeholder}
+          value={open || clearOnSelect ? query : (chosen?.company ?? '')}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setActive(0)
+            setOpen(true)
+          }}
+          onKeyDown={onKeyDown}
+        />
+      </label>
+      {open && (
+        <ul className="search-results" id={listId} role="listbox">
+          {results.length === 0 && <li className="muted">No stock matches.</li>}
+          {results.map((stock, index) => (
+            <li
+              key={stock.ticker}
+              role="option"
+              aria-selected={index === active}
+              className={index === active ? 'active' : undefined}
+              // mouse down, not click: the box would lose focus (and close the list) before a click lands
+              onMouseDown={(event) => {
+                event.preventDefault()
+                pick(stock)
+              }}
+            >
+              <span>{stock.company}</span>
+              <span className="muted"> {stock.ticker.replace(/\.SW$/, '')}</span>
+              {stock.in_smi && <span className="badge">SMI</span>}
+              {!stock.loaded && <span className="muted"> not loaded yet</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// Why a test is shorter than asked: the stock that was listed last decides where it can start.
+export function LimitNote({ limitedBy }) {
+  if (!limitedBy) return null
+
+  return (
+    <p className="muted">
+      Starts {displayDate(limitedBy.date)} because {limitedBy.company} was only listed then.
+    </p>
+  )
+}
+
+// A range widened by `WINDOW_PADDING` of its length on each side, as plotly date strings.
+export function paddedRange([start, end]) {
+  const first = utcMidnight(start).getTime()
+  const last = utcMidnight(end).getTime()
+  const pad = (last - first) * WINDOW_PADDING
+  return [toAxisDate(new Date(first - pad)), toAxisDate(new Date(last + pad))]
+}
+
+// Only the rows near the visible range: drawing 25 years of candles at once would make zooming sluggish.
+export function windowRows(rows, range) {
+  const [start, end] = paddedRange(range)
+  return rows.filter((row) => row.date >= dateOnly(start) && row.date <= dateOnly(end))
 }

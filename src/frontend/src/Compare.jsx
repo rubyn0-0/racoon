@@ -5,6 +5,7 @@ import Plot from 'react-plotly.js'
 import { useState } from 'react'
 import { fetchCompare } from './api'
 import {
+  LimitNote,
   OptionButtons,
   baseLayout,
   baseXAxis,
@@ -20,6 +21,7 @@ import {
   plotConfig,
   plotStyle,
   signedPercent,
+  waitForStocks,
   weightingById,
 } from './helpers'
 import {
@@ -27,7 +29,7 @@ import {
   BACKTEST_LEGEND_Y,
   BACKTEST_MARGIN_LEFT,
   BACKTEST_MARGIN_RIGHT,
-  BACKTEST_STEPS,
+  CAPITAL_STEP,
   COMPARE_DEFAULTS,
   CURRENCY,
   DAILY_INTERVAL,
@@ -136,7 +138,7 @@ function CompareTable({ result }) {
 // The date range every stock of the chosen portfolios has prices for.
 function commonRange(stocks, portfolios) {
   const tickers = new Set(portfolios.flatMap((portfolio) => portfolio.holdings.map((holding) => holding.ticker)))
-  const held = stocks.filter((stock) => tickers.has(stock.ticker))
+  const held = stocks.filter((stock) => tickers.has(stock.ticker) && stock.start_date)
   if (held.length === 0) return { start: '', end: '' }
 
   return {
@@ -145,12 +147,15 @@ function commonRange(stocks, portfolios) {
   }
 }
 
-function Compare({ portfolios, stocks }) {
+function Compare({ portfolios, stocks, onStocksChanged }) {
   const [selected, setSelected] = useState(() => portfolios.slice(0, MIN_COMPARE).map((portfolio) => portfolio.id))
   const [settings, setSettings] = useState({ start: '', end: '', ...COMPARE_DEFAULTS })
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [running, setRunning] = useState(false)
+  const [progress, setProgress] = useState(null)
+
+  const chosen = portfolios.filter((portfolio) => selected.includes(portfolio.id))
 
   if (portfolios.length < MIN_COMPARE) {
     return (
@@ -161,7 +166,7 @@ function Compare({ portfolios, stocks }) {
     )
   }
 
-  const range = commonRange(stocks, portfolios.filter((portfolio) => selected.includes(portfolio.id)))
+  const range = commonRange(stocks, chosen)
 
   function update(field, value) {
     setSettings((current) => ({ ...current, [field]: value }))
@@ -182,11 +187,18 @@ function Compare({ portfolios, stocks }) {
     setRunning(true)
     setError('')
     try {
+      // Nothing is loaded before this press: the stocks of every chosen portfolio are fetched now.
+      await waitForStocks(
+        [...new Set(chosen.flatMap((portfolio) => portfolio.holdings.map((holding) => holding.ticker)))],
+        setProgress,
+      )
+      onStocksChanged()
       setResult(await fetchCompare(selected, settings))
     } catch (err) {
       setError(err.message)
     } finally {
       setRunning(false)
+      setProgress(null)
     }
   }
 
@@ -227,7 +239,7 @@ function Compare({ portfolios, stocks }) {
           </label>
           <label className="field">
             Starting amount ({CURRENCY})
-            <input type="number" min="0" step={BACKTEST_STEPS.initial} value={settings.initial} onChange={(event) => update('initial', event.target.value)} />
+            <input type="number" min="0" step={CAPITAL_STEP} value={settings.initial} onChange={(event) => update('initial', event.target.value)} />
           </label>
           <label className="field">
             New money per period ({CURRENCY})
@@ -247,7 +259,7 @@ function Compare({ portfolios, stocks }) {
 
         <div className="form-actions">
           <button type="submit" className="primary" disabled={running || selected.length < MIN_COMPARE}>
-            {running ? 'Running…' : 'Run comparison'}
+            {!running ? 'Run comparison' : progress && progress.done < progress.total ? `Loading ${progress.done} of ${progress.total}…` : 'Running…'}
           </button>
           {selected.length < MIN_COMPARE && <span className="muted">Pick at least {MIN_COMPARE} portfolios.</span>}
         </div>
@@ -256,6 +268,7 @@ function Compare({ portfolios, stocks }) {
       {error && <p className="error" role="alert">{error}</p>}
       {result && (
         <div className="backtest-result">
+          <LimitNote limitedBy={result.limited_by} />
           <CompareChart result={result} />
           <CompareTable result={result} />
         </div>

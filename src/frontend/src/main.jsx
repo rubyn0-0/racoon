@@ -8,6 +8,7 @@ import { fetchStocks } from './api'
 import Explorer from './Explorer'
 import { applyThemeVariables } from './helpers'
 import Portfolios from './Portfolios'
+import TestLoader from './TestLoader' // TEMPORARY
 import { DEFAULT_VIEW, VIEWS } from './settings'
 
 function App() {
@@ -15,10 +16,15 @@ function App() {
   const [loadError, setLoadError] = useState('')
   const [view, setView] = useState(DEFAULT_VIEW)
 
+  // Prices load on demand, so the list changes (dates, sizes) as stocks get loaded; screens call this to re-read it.
+  function refreshStocks() {
+    fetchStocks().then(setStocks).catch((err) => setLoadError(err.message))
+  }
+
   useEffect(() => {
     fetchStocks()
       .then((data) => {
-        if (data.length === 0) throw new Error('No stocks in the database. Run the ingest first.')
+        if (data.length === 0) throw new Error('The stock list is empty. Check data/six_stocks_tickers.csv.')
         setStocks(data)
       })
       .catch((err) => setLoadError(err.message))
@@ -30,9 +36,9 @@ function App() {
   } else if (!stocks) {
     content = <p className="muted">Loading stock data…</p>
   } else if (view === 'portfolios') {
-    content = <Portfolios stocks={stocks} />
+    content = <Portfolios stocks={stocks} onStocksChanged={refreshStocks} />
   } else {
-    content = <Explorer stocks={stocks} />
+    content = <Explorer stocks={stocks} onStocksChanged={refreshStocks} />
   }
 
   return (
@@ -53,6 +59,8 @@ function App() {
           ))}
         </nav>
       </header>
+      {/* TEMPORARY: red button that loads every stock, with a table of what is really stored */}
+      {stocks && <TestLoader stocks={stocks} onStocksChanged={refreshStocks} />}
       {content}
     </main>
   )

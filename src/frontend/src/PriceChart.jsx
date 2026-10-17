@@ -1,6 +1,7 @@
 // The price chart: candles or a line, moving averages and volume, drawn with Plotly.
 // Sizes, colors, line widths and padding are in settings.js; the screen around it is Explorer.jsx.
 import Plot from 'react-plotly.js'
+import { useMemo } from 'react'
 import {
   averageKey,
   averageLabel,
@@ -17,6 +18,7 @@ import {
   plotConfig,
   plotStyle,
   utcMidnight,
+  windowRows,
 } from './helpers'
 import {
   AVERAGE_LINE_WIDTH,
@@ -29,6 +31,7 @@ import {
   FREE_PAN_MIN_PADDING,
   FREE_PAN_PADDING,
   LINE_WIDTH,
+  MAX_DRAWN_CANDLES,
   PANEL_GAP,
   PRICE_LEGEND_Y,
   PRICE_MARGIN_LEFT,
@@ -37,6 +40,7 @@ import {
   VOLUME_HEIGHT,
   VOLUME_OPACITY,
   WICK_WIDTH,
+  ZOOMED_OUT_NOTE,
   theme,
 } from './settings'
 
@@ -172,9 +176,16 @@ function PriceChart({
   onRelayout,
 }) {
   const daily = interval === DAILY_INTERVAL
-  const candles = chartType === CHART_TYPE.CANDLES
-  const volume = showVolume
   const displayedPrices = series.prices
+  const [viewStart, viewEnd] = visibleDateRange
+
+  // Only the rows near the view are drawn, and past MAX_DRAWN_CANDLES a closing-price line replaces the
+  // candles (one path instead of thousands of shapes), so 25 years stay smooth to pan and zoom.
+  const nearby = useMemo(() => windowRows(displayedPrices, [viewStart, viewEnd]), [displayedPrices, viewStart, viewEnd])
+  const zoomedOut = chartType === CHART_TYPE.CANDLES && nearby.length > MAX_DRAWN_CANDLES
+  const candles = chartType === CHART_TYPE.CANDLES && !zoomedOut
+  const volume = showVolume && !zoomedOut
+  const holidays = useMemo(() => (daily ? closedWeekdays(displayedPrices) : []), [daily, displayedPrices])
   const { hoverFormat } = intervalById[interval]
   const [dataStart, dataEnd] = dataBounds(displayedPrices, interval)
   // A range that starts (or ends) at the first (last) trading day would cut that candle in half.
@@ -221,11 +232,14 @@ function PriceChart({
           fixedrange: true,
         }
 
-  const data = [
-    ...priceTraces(series, { candles, interval }),
-    ...averageTraces(series, averages),
-    ...(volume ? [volumeTrace(series, interval)] : []),
-  ]
+  const data = useMemo(() => {
+    const shown = { stock: series.stock, prices: nearby }
+    return [
+      ...priceTraces(shown, { candles, interval }),
+      ...averageTraces(shown, averages),
+      ...(volume ? [volumeTrace(shown, interval)] : []),
+    ]
+  }, [series.stock, nearby, candles, interval, averages, volume])
 
   return (
     <Plot
@@ -240,6 +254,19 @@ function PriceChart({
         barmode: 'overlay',
         bargap: 0,
         uirevision: revision.x,
+        annotations: zoomedOut
+          ? [{
+              text: ZOOMED_OUT_NOTE,
+              xref: 'paper',
+              yref: 'paper',
+              x: 0.01,
+              y: 0.99,
+              xanchor: 'left',
+              yanchor: 'top',
+              showarrow: false,
+              font: { color: theme.muted },
+            }]
+          : [],
         showlegend: data.filter((trace) => trace.showlegend !== false).length > 1,
         legend: legend(PRICE_LEGEND_Y),
         xaxis: {
@@ -248,7 +275,7 @@ function PriceChart({
           rangeslider: { visible: false },
           // Daily rows only exist on trading days; hide weekends and holidays instead of drawing gaps.
           ...(daily && {
-            rangebreaks: [{ bounds: ['sat', 'mon'] }, { values: closedWeekdays(displayedPrices) }],
+            rangebreaks: [{ bounds: ['sat', 'mon'] }, { values: holidays }],
           }),
           spikesnap: 'cursor',
           hoverformat: hoverFormat,

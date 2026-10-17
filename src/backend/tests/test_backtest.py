@@ -165,17 +165,25 @@ def test_inflow_waits_for_the_quarter_when_investing_quarterly():
     assert result["investments"][0]["buys"][0]["shares"] == 30
 
 
-def test_starting_position_is_valued_at_the_start_and_waits_for_the_next_investing_day():
+def test_owned_shares_count_towards_the_first_purchase():
     closes = prices([("2025-01-02", 10, 20), ("2025-01-03", 10, 20)])
 
-    result = backtest(
-        closes, no_dividends(closes), half_half(), start_shares={"A": 10, "B": 5}, start_cash=50
-    )
+    result = backtest(closes, no_dividends(closes), half_half(), initial=50, start_shares={"A": 10, "B": 5})
 
-    assert result["series"][0]["value"] == pytest.approx(250)  # 10 x 10 + 5 x 20 + 50 cash
-    assert result["summary"]["invested"] == pytest.approx(250)
+    # 10 x 10 + 5 x 20 owned, plus 50 of starting capital: 250 to spread 50/50.
+    assert result["series"][0]["invested"] == pytest.approx(250)
+    assert [holding["shares"] for holding in result["holdings"]] == [13, 6]
+    assert result["summary"]["cash"] == pytest.approx(0)
+    assert result["summary"]["final_value"] == pytest.approx(250)
+
+
+def test_owned_shares_alone_are_simply_held():
+    closes = prices([("2025-01-02", 10, 20), ("2025-01-03", 10, 20)])
+
+    result = backtest(closes, no_dividends(closes), half_half(), initial=0, start_shares={"A": 10, "B": 5})
+
     assert result["investments"] == []
-    assert result["summary"]["cash"] == pytest.approx(50)
+    assert result["series"][0]["value"] == pytest.approx(200)
 
 
 def test_ownership_backtest_buys_in_proportion_to_company_value():

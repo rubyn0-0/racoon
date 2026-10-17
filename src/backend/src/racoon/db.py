@@ -93,3 +93,32 @@ def init_db():
         connection.execute(text(
             f"ALTER TABLE portfolios ADD CONSTRAINT portfolios_weighting_check CHECK (weighting IN ({WEIGHTING_VALUES}))"
         ))
+        # Added with on-demand loading: what each company's stored history looks like, so listing
+        # the stocks never has to scan the price table.
+        for column in (
+            "in_smi BOOLEAN NOT NULL DEFAULT FALSE",
+            "price_start DATE",
+            "price_end DATE",
+            "price_count INTEGER NOT NULL DEFAULT 0",
+            "refreshed_at TIMESTAMPTZ",
+            "full_history BOOLEAN NOT NULL DEFAULT FALSE",
+        ):
+            connection.execute(text(f"ALTER TABLE companies ADD COLUMN IF NOT EXISTS {column}"))
+        # Prices stored before these columns existed: summarise them once.
+        connection.execute(text("""
+            UPDATE companies c SET price_start = a.d_min, price_end = a.d_max, price_count = a.n
+            FROM (
+                SELECT ticker, min(date) AS d_min, max(date) AS d_max, count(*) AS n
+                FROM prices GROUP BY ticker
+            ) a
+            WHERE a.ticker = c.ticker AND c.price_count = 0
+        """))
+        # The starting amount is now a saved setting of the portfolio. A portfolio that had a starting
+        # position with cash keeps that cash as its starting capital; this runs once (start_cash is zeroed).
+        connection.execute(text(
+            "ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS initial_capital DOUBLE PRECISION NOT NULL DEFAULT 10000"
+        ))
+        connection.execute(text("""
+            UPDATE portfolios SET initial_capital = start_cash, start_cash = 0
+            WHERE start_date IS NOT NULL AND start_cash > 0
+        """))

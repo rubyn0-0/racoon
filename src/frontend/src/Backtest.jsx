@@ -5,6 +5,7 @@ import Plot from 'react-plotly.js'
 import { useEffect, useState } from 'react'
 import { fetchBacktest, fetchPlan } from './api'
 import {
+  LimitNote,
   OptionButtons,
   baseLayout,
   baseXAxis,
@@ -21,14 +22,13 @@ import {
   plotConfig,
   plotStyle,
   signedPercent,
+  waitForStocks,
 } from './helpers'
 import {
-  BACKTEST_DEFAULTS,
   BACKTEST_HEIGHT,
   BACKTEST_LEGEND_Y,
   BACKTEST_MARGIN_LEFT,
   BACKTEST_MARGIN_RIGHT,
-  BACKTEST_STEPS,
   CHART_FONT_SIZE,
   CURRENCY,
   DAILY_INTERVAL,
@@ -198,7 +198,11 @@ function PlanPanel({ plan, firstDate }) {
 // The panel: settings form, then the result below it.
 // The backtest can only start once every holding has prices, and end when the first one stops.
 function commonRange(stocks, portfolio) {
-  const held = stocks.filter((stock) => portfolio.holdings.some((holding) => holding.ticker === stock.ticker))
+  const held = stocks.filter(
+    (stock) => stock.start_date && portfolio.holdings.some((holding) => holding.ticker === stock.ticker),
+  )
+  if (held.length === 0) return { start: '', end: '' }
+
   return {
     start: held.reduce((latest, stock) => (stock.start_date > latest ? stock.start_date : latest), held[0].start_date),
     end: held.reduce((earliest, stock) => (stock.end_date < earliest ? stock.end_date : earliest), held[0].end_date),
@@ -241,7 +245,8 @@ function ShareBar({ summary }) {
 
 // One sentence on how the money got in, from the portfolio's rules.
 function paidInNote(settings) {
-  const start = settings.start_date ? 'Starting position' : `${chf(settings.initial)} at the start`
+  const capital = `${chf(settings.initial_capital)} starting capital`
+  const start = settings.start_date ? `${capital} and shares you owned` : capital
   if (!settings.inflow_amount) return start
   return `${start}, then ${chf(settings.inflow_amount)} ${frequencyById[settings.inflow_frequency].per}`
 }
@@ -264,6 +269,8 @@ function BacktestResult({ result, plan }) {
           <span className="muted">on {chf(summary.invested)} paid in since {displayDate(summary.start_date)}</span>
         </span>
       </div>
+
+      <LimitNote limitedBy={result.limited_by} />
 
       <div className="tiles">
         <Tile label="Paid in" value={chf(summary.invested)} note={paidInNote(settings)} />
@@ -307,32 +314,21 @@ function BacktestResult({ result, plan }) {
   )
 }
 
-function BacktestPanel({ stocks, portfolio }) {
-  const [defaults] = useState(() => ({
-    ...commonRange(stocks, portfolio),
-    ...BACKTEST_DEFAULTS,
-  }))
-  const [settings, setSettings] = useState(defaults)
+// The backtest panel. Nothing is loaded or run until you press Run backtest; that loads the portfolio's
+// stocks first (with a progress message) and then simulates.
+function BacktestPanel({ stocks, portfolio, onStocksChanged }) {
+  const tickers = portfolio.holdings.map((holding) => holding.ticker)
+  const range = commonRange(stocks, portfolio)
+  const [settings, setSettings] = useState({ start: '', end: '' })
   // The result together with the settings that produced it, so the plan matches the chart.
   const [run, setRun] = useState(null)
   const [error, setError] = useState('')
-  const [running, setRunning] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [progress, setProgress] = useState(null)
   const [showPlan, setShowPlan] = useState(false)
   const [planUntil, setPlanUntil] = useState('')
   const [plan, setPlan] = useState(null)
   const [planError, setPlanError] = useState('')
-
-  // Run once with the defaults so a saved portfolio shows results straight away.
-  useEffect(() => {
-    let current = true
-    fetchBacktest(portfolio.id, defaults)
-      .then((data) => current && setRun({ result: data, settings: defaults }))
-      .catch((err) => current && setError(err.message))
-      .finally(() => current && setRunning(false))
-    return () => {
-      current = false
-    }
-  }, [portfolio.id, defaults])
 
   // The plan follows the result on screen; it is fetched only while the plan is switched on.
   const ranSettings = run?.settings
@@ -340,7 +336,7 @@ function BacktestPanel({ stocks, portfolio }) {
     if (!showPlan || !ranSettings) return undefined
 
     let current = true
-    fetchPlan(portfolio.id, { start: ranSettings.start, initial: ranSettings.initial, until: planUntil })
+    fetchPlan(portfolio.id, { start: ranSettings.start, until: planUntil })
       .then((data) => {
         if (!current) return
         setPlan(data)
@@ -359,7 +355,7 @@ function BacktestPanel({ stocks, portfolio }) {
   async function submit(event) {
     event.preventDefault()
 
-    if (settings.start > settings.end) {
+    if (settings.start && settings.end && settings.start > settings.end) {
       setError(START_BEFORE_END_ERROR)
       return
     }
@@ -367,15 +363,20 @@ function BacktestPanel({ stocks, portfolio }) {
     setRunning(true)
     setError('')
     try {
+      await waitForStocks(tickers, setProgress)
+      onStocksChanged()
       setRun({ result: await fetchBacktest(portfolio.id, settings), settings })
     } catch (err) {
       setError(err.message)
     } finally {
       setRunning(false)
+      setProgress(null)
     }
   }
 
   const hasStartingPosition = Boolean(portfolio.start_date)
+  const loading = progress && progress.done < progress.total
+  const buttonText = !running ? 'Run backtest' : loading ? `Loading ${progress.done} of ${progress.total}…` : 'Running…'
 
   return (
     <section className="panel" aria-label="Backtest">
@@ -387,20 +388,14 @@ function BacktestPanel({ stocks, portfolio }) {
 
       <form className="backtest-form" onSubmit={submit}>
         {!hasStartingPosition && (
-          <>
-            <label className="field">
-              From
-              <input type="date" value={settings.start} min={defaults.start} max={defaults.end} onChange={(event) => update('start', event.target.value)} />
-            </label>
-            <label className="field">
-              Starting amount ({CURRENCY})
-              <input type="number" min="0" step={BACKTEST_STEPS.initial} value={settings.initial} onChange={(event) => update('initial', event.target.value)} />
-            </label>
-          </>
+          <label className="field">
+            From
+            <input type="date" value={settings.start} min={range.start || undefined} max={range.end || undefined} onChange={(event) => update('start', event.target.value)} />
+          </label>
         )}
         <label className="field">
           To
-          <input type="date" value={settings.end} min={defaults.start} max={defaults.end} onChange={(event) => update('end', event.target.value)} />
+          <input type="date" value={settings.end} min={range.start || undefined} max={range.end || undefined} onChange={(event) => update('end', event.target.value)} />
         </label>
         <div className="backtest-actions">
           <OptionButtons
@@ -412,15 +407,16 @@ function BacktestPanel({ stocks, portfolio }) {
           {showPlan && (
             <label className="field">
               Look ahead to
-              <input type="date" value={planUntil} min={defaults.end} onChange={(event) => setPlanUntil(event.target.value)} />
+              <input type="date" value={planUntil} min={range.end || undefined} onChange={(event) => setPlanUntil(event.target.value)} />
             </label>
           )}
-          <button type="submit" className="primary" disabled={running}>
-            {running ? 'Running…' : 'Run backtest'}
-          </button>
+          <button type="submit" className="primary" disabled={running}>{buttonText}</button>
         </div>
       </form>
 
+      {!run && !running && !error && (
+        <p className="muted">Press Run backtest to load the prices of these stocks and simulate.</p>
+      )}
       {error && <p className="error" role="alert">{error}</p>}
       {planError && <p className="error" role="alert">{planError}</p>}
       {run && <BacktestResult result={run.result} plan={showPlan ? plan : null} />}

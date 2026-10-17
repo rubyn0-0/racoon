@@ -1,5 +1,6 @@
 """Portfolio weights and backtest simulation. Pure functions: no database, no HTTP."""
 
+import numpy as np
 import pandas as pd
 
 MANUAL, EQUAL, MARKET_CAP, OWNERSHIP = "manual", "equal", "market_cap", "ownership"
@@ -123,6 +124,12 @@ def allocate(cash, prices, shares, weights):
         cash -= prices[best]
 
 
+def period_end_flags(dates, frequency):
+    """One flag per day: is it the last trading day of its month / quarter / year (the final day never is)."""
+    periods = [_period(date, frequency) for date in dates]
+    return [index + 1 < len(dates) and periods[index] != periods[index + 1] for index in range(len(dates))]
+
+
 def backtest(
     closes,
     dividends,
@@ -132,64 +139,72 @@ def backtest(
     inflow_frequency=MONTHLY,
     invest_frequency=MONTHLY,
     start_shares=None,
-    start_cash=0.0,
 ):
     """Simulate buy-and-hold with a cash balance, whole shares and scheduled investing.
 
-    closes / dividends: DataFrames indexed by "YYYY-MM-DD", one column per ticker, no gaps.
-    weight_rule(prices) gives the target weights for a day.
+    closes / dividends: DataFrames with the same "YYYY-MM-DD" index and columns, one column per ticker,
+    no gaps. weight_rule(prices) gives the target weights for a day (prices is a {ticker: price} dict).
 
-    Start: either `initial` cash, invested on the first day, or a starting position
-    (`start_shares` {ticker: shares} plus `start_cash`) that is simply held until the next investing day.
+    Start: `initial` cash, invested on the first day, plus optionally shares already owned
+    (`start_shares` {ticker: shares}) that are simply held from the start; the first purchase counts them.
     Dividends and `inflow` (credited on the last trading day of each inflow period) go to the cash balance.
     Whenever the invest frequency says so, the whole balance is spent on whole shares. Nothing is ever sold.
+
+    Works on numpy arrays, one pass over the days; a 25 year, 20 stock run takes a fraction of a second.
     """
     tickers = list(closes.columns)
     dates = list(closes.index)
-    shares = {ticker: float((start_shares or {}).get(ticker, 0)) for ticker in tickers}
-    first_prices = closes.iloc[0]
-    holding_start = sum(shares[ticker] * first_prices[ticker] for ticker in tickers)
+    price_rows = closes.to_numpy(dtype=float)
+    dividend_rows = dividends.to_numpy(dtype=float)
+    inflow_days = period_end_flags(dates, inflow_frequency) if inflow else None
+    invest_days = (
+        [False] * len(dates) if invest_frequency == NEVER
+        else [True] * len(dates) if invest_frequency == IMMEDIATE
+        else period_end_flags(dates, invest_frequency)
+    )
 
-    cash = float(start_cash) if start_shares is not None else float(initial)
-    invested = holding_start + cash
+    shares = np.array([float((start_shares or {}).get(ticker, 0)) for ticker in tickers])
+    cash = float(initial)
+    invested = float(shares @ price_rows[0]) + cash
     dividends_paid = 0.0
     peak = max_drawdown = 0.0
     series, investments = [], []
 
-    for index, (date, prices) in enumerate(closes.iterrows()):
-        for ticker in tickers:
-            per_share = dividends.at[date, ticker]
-            if per_share:
-                payout = shares[ticker] * per_share
-                dividends_paid += payout
-                cash += payout
+    for index, date in enumerate(dates):
+        prices = price_rows[index]
 
-        if inflow and index > 0 and is_period_end(dates, index, inflow_frequency):
+        payout = float(shares @ dividend_rows[index])
+        if payout:
+            dividends_paid += payout
+            cash += payout
+
+        if inflow and index > 0 and inflow_days[index]:
             cash += inflow
             invested += inflow
 
-        first_day_purchase = index == 0 and start_shares is None
-        if cash > 0 and (first_day_purchase or is_investing_day(dates, index, invest_frequency)):
+        if cash > 0 and (index == 0 or invest_days[index]):
             cash_before = cash
-            shares, cash, purchases = allocate(cash, prices, shares, weight_rule(prices))
+            price_map = dict(zip(tickers, prices.tolist()))
+            held, cash, purchases = allocate(cash, price_map, dict(zip(tickers, shares.tolist())), weight_rule(price_map))
+            shares = np.array([held[ticker] for ticker in tickers])
             bought = [
-                {"ticker": ticker, "shares": count, "price": float(prices[ticker])}
+                {"ticker": ticker, "shares": count, "price": price_map[ticker]}
                 for ticker, count in purchases.items()
                 if count
             ]
             if bought:
                 investments.append({"date": date, "cash_before": cash_before, "cash_after": cash, "buys": bought})
 
-        value = float(sum(shares[ticker] * prices[ticker] for ticker in tickers) + cash)
+        value = float(shares @ prices + cash)
         peak = max(peak, value)
         if peak:
             max_drawdown = min(max_drawdown, value / peak - 1)
         series.append({"date": date, "value": value, "invested": invested, "cash": cash})
 
-    last_prices = closes.iloc[-1]
+    last_prices = dict(zip(tickers, price_rows[-1].tolist()))
     final_value = series[-1]["value"]
     gain = final_value - invested
-    holdings_value = {ticker: float(shares[ticker] * last_prices[ticker]) for ticker in tickers}
+    holdings_value = {ticker: float(shares[i] * last_prices[ticker]) for i, ticker in enumerate(tickers)}
     final_weights = weight_rule(last_prices)
 
     summary = {
@@ -211,13 +226,25 @@ def backtest(
         {
             "ticker": ticker,
             "target_weight": final_weights[ticker],
-            "shares": float(shares[ticker]),
+            "shares": float(shares[i]),
             "value": holdings_value[ticker],
             "weight": holdings_value[ticker] / final_value if final_value else None,
         }
-        for ticker in tickers
+        for i, ticker in enumerate(tickers)
     ]
     return {"summary": summary, "holdings": holdings, "series": series, "investments": investments}
+
+
+def limiting_stock(first_days, start=None):
+    """(ticker, first day) of the stock listed last, when that shortens the test; otherwise None.
+
+    `first_days` maps each ticker to its first price date ("YYYY-MM-DD"); `start` is the start the user asked
+    for, as the same kind of string. If they asked for a start after that listing, nothing is cut short.
+    """
+    latest = first_days.max()
+    if latest > first_days.min() and (not start or start <= latest):
+        return first_days.idxmax(), latest
+    return None
 
 
 def common_window(frames):

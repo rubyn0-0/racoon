@@ -1,17 +1,20 @@
 // The price explorer screen: pick a stock and dates, then read the chart.
 // Chart controls and state live here; the chart itself is drawn in PriceChart.jsx.
 // Button labels, defaults and period buttons are in settings.js.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchPrices } from './api'
 import {
   AVERAGE_OPTIONS,
+  LoadingNote,
   OptionButtons,
+  StockSearch,
   changeClass,
   dataBounds,
   dateOnly,
   periodLabel,
   price,
   signedPercent,
+  useStockData,
   utcMidnight,
 } from './helpers'
 import PriceChart from './PriceChart'
@@ -78,7 +81,7 @@ function PriceHeader({ series, interval, startDate, endDate, latestDate }) {
 }
 
 
-// The screen itself: form, chart controls, chart and period buttons.
+// The screen itself: search, form, chart controls, chart and period buttons.
 function periodStart(period, endDate, earliestDate) {
   if (period.id === 'max') return earliestDate
   if (period.id === 'YTD') return `${endDate.slice(0, 4)}-01-01`
@@ -88,29 +91,36 @@ function periodStart(period, endDate, earliestDate) {
   return dateOnly(date.toISOString())
 }
 
-function Explorer({ stocks }) {
-  const initialStock = stocks[0]
-  const [ticker, setTicker] = useState(initialStock.ticker)
-  const [startDate, setStartDate] = useState(initialStock.start_date)
-  const [endDate, setEndDate] = useState(initialStock.end_date)
-  const [selection, setSelection] = useState({
-    startDate: initialStock.start_date,
-    endDate: initialStock.end_date,
-  })
-  const [visibleDateRange, setVisibleDateRange] = useState([
-    initialStock.start_date,
-    initialStock.end_date,
-  ])
+function Explorer({ stocks, onStocksChanged }) {
+  // Nothing is chosen and nothing is loaded until you search for a stock and press Load chart.
+  // The form edits `ticker` and its dates; the chart only switches to them on Load chart.
+  const [ticker, setTicker] = useState('')
+  const [formStart, setFormStart] = useState(null) // null = the first day of the chosen stock
+  const [formEnd, setFormEnd] = useState(null) // null = the last day
+  const [chartTicker, setChartTicker] = useState('')
+  // Dates chosen with the form or a period button, and a zoom made on the chart. null = the whole history.
+  const [applied, setApplied] = useState(null)
+  const [zoom, setZoom] = useState(null)
   const [chartType, setChartType] = useState(DEFAULT_CHART_TYPE)
   const [chartMode, setChartMode] = useState(DEFAULT_CHART_MODE)
   const [priceInterval, setPriceInterval] = useState(DEFAULT_INTERVAL)
   const [averages, setAverages] = useState([])
   const [showVolume, setShowVolume] = useState(false)
-  // The form edits `ticker`; the chart only switches to it on Load chart.
-  const [chartTicker, setChartTicker] = useState(initialStock.ticker)
   const [seriesByKey, setSeriesByKey] = useState({})
+  const [dataVersion, setDataVersion] = useState(0)
   const [error, setError] = useState('')
   const requests = useRef({})
+
+  // The backend loads a stock's history the first time it is asked for it; this waits for that.
+  const data = useStockData(chartTicker ? [chartTicker] : [], handleDataChanged)
+
+  // New or refreshed prices arrived: forget the cached series and refresh what we know about the stocks.
+  function handleDataChanged() {
+    requests.current = {}
+    setSeriesByKey({})
+    setDataVersion((version) => version + 1)
+    onStocksChanged()
+  }
 
   // Each stock and interval is looked up from the API once, then reused.
   function ensureSeries(nextTicker, interval) {
@@ -129,67 +139,72 @@ function Explorer({ stocks }) {
     return requests.current[key]
   }
 
-  useEffect(() => {
-    ensureSeries(chartTicker, priceInterval)
-      .catch((err) => setError(`Could not load prices: ${err.message}`))
-  }, [chartTicker, priceInterval])
-
   const selectedStock = stocks.find((stock) => stock.ticker === ticker)
   const chartStock = stocks.find((stock) => stock.ticker === chartTicker)
+  const dataReady = Boolean(chartStock) && data.ready && chartStock.loaded
+
+  useEffect(() => {
+    if (!dataReady) return
+    ensureSeries(chartTicker, priceInterval)
+      .catch((err) => setError(`Could not load prices: ${err.message}`))
+  }, [dataReady, chartTicker, priceInterval, dataVersion])
+
+  const startDate = formStart ?? selectedStock?.start_date ?? ''
+  const endDate = formEnd ?? selectedStock?.end_date ?? ''
+  const earliestChartDate = chartStock?.start_date
+  const latestChartDate = chartStock?.end_date
+  const selection = {
+    startDate: applied?.startDate || earliestChartDate,
+    endDate: applied?.endDate || latestChartDate,
+  }
+  const visibleDateRange = useMemo(
+    () => zoom ?? [selection.startDate, selection.endDate],
+    [zoom, selection.startDate, selection.endDate],
+  )
   const chartPrices = seriesByKey[`${chartTicker}:${priceInterval}`]
-  const chartSeries = chartPrices ? { stock: chartStock, prices: chartPrices } : null
-  const earliestChartDate = chartStock.start_date
-  const latestChartDate = chartStock.end_date
+  const chartSeries = dataReady && chartPrices ? { stock: chartStock, prices: chartPrices } : null
+  const emptyRange = chartSeries && !chartPrices.some(
+    (row) => row.date >= selection.startDate && row.date <= selection.endDate,
+  )
   const revision = {
     x: `${selection.startDate}-${selection.endDate}-${chartMode}-${priceInterval}`,
     y: `${chartMode}-${priceInterval}-${chartTicker}`,
   }
 
   function applyRange(start, end) {
-    setStartDate(start)
-    setEndDate(end)
-    setSelection({ startDate: start, endDate: end })
-    setVisibleDateRange([start, end])
+    setApplied({ startDate: start, endDate: end })
+    setZoom(null)
+    setFormStart(start)
+    setFormEnd(end)
     setError('')
   }
 
-  function changeCompany(event) {
-    const nextTicker = event.target.value
-    const nextStock = stocks.find((stock) => stock.ticker === nextTicker)
-
+  function changeCompany(nextTicker) {
     setTicker(nextTicker)
-    setStartDate(nextStock.start_date)
-    setEndDate(nextStock.end_date)
+    setFormStart(null)
+    setFormEnd(null)
     setError('')
   }
 
-  async function loadPrices(event) {
+  function loadPrices(event) {
     event.preventDefault()
 
-    if (startDate > endDate) {
+    if (!ticker) return
+
+    if (startDate && endDate && startDate > endDate) {
       setError(START_BEFORE_END_ERROR)
       return
     }
 
-    // Daily rows answer "is there any trading day in this range", whatever the interval.
-    let dailyPrices
-    try {
-      dailyPrices = await ensureSeries(ticker, DAILY_INTERVAL)
-    } catch (err) {
-      setError(`Could not load prices: ${err.message}`)
-      return
-    }
-
-    if (!dailyPrices.some((price) => price.date >= startDate && price.date <= endDate)) {
-      setError('No trading data exists in this date range.')
-      return
-    }
-
     setChartTicker(ticker)
-    applyRange(startDate, endDate)
+    setApplied(formStart || formEnd ? { startDate, endDate } : null)
+    setZoom(null)
+    setError('')
   }
 
   function choosePeriod(periodId) {
+    if (!dataReady) return
+
     const period = PERIODS.find((item) => item.id === periodId)
     const start = periodStart(period, latestChartDate, earliestChartDate)
     applyRange(start < earliestChartDate ? earliestChartDate : start, latestChartDate)
@@ -219,35 +234,25 @@ function Explorer({ stocks }) {
     const nextEnd = event['xaxis.range[1]']
 
     if (nextStart && nextEnd) {
-      setVisibleDateRange(clampToData([nextStart, nextEnd]))
+      setZoom(clampToData([nextStart, nextEnd]))
     } else if (event['xaxis.autorange']) {
-      setVisibleDateRange([earliestChartDate, latestChartDate])
+      setZoom([earliestChartDate, latestChartDate])
     }
   }
 
   return (
     <>
-
       <form className="toolbar" onSubmit={loadPrices}>
-        <label>
-          Company
-          <select value={ticker} onChange={changeCompany}>
-            {stocks.map((stock) => (
-              <option key={stock.ticker} value={stock.ticker}>
-                {stock.company}
-              </option>
-            ))}
-          </select>
-        </label>
+        <StockSearch label="Company" stocks={stocks} value={ticker} onSelect={changeCompany} />
 
         <label>
           From
           <input
             type="date"
             value={startDate}
-            min={selectedStock.start_date}
-            max={selectedStock.end_date}
-            onChange={(event) => setStartDate(event.target.value)}
+            min={selectedStock?.start_date ?? undefined}
+            max={selectedStock?.end_date ?? undefined}
+            onChange={(event) => setFormStart(event.target.value)}
           />
         </label>
 
@@ -256,16 +261,17 @@ function Explorer({ stocks }) {
           <input
             type="date"
             value={endDate}
-            min={selectedStock.start_date}
-            max={selectedStock.end_date}
-            onChange={(event) => setEndDate(event.target.value)}
+            min={selectedStock?.start_date ?? undefined}
+            max={selectedStock?.end_date ?? undefined}
+            onChange={(event) => setFormEnd(event.target.value)}
           />
         </label>
 
-        <button type="submit" className="primary">Load chart</button>
+        <button type="submit" className="primary" disabled={!ticker}>Load chart</button>
       </form>
 
       {error && <p className="error" role="alert">{error}</p>}
+      {emptyRange && <p className="error" role="alert">No trading data exists in this date range.</p>}
 
       <section className="chart-card" aria-label="Price chart">
         <PriceHeader
@@ -310,9 +316,10 @@ function Explorer({ stocks }) {
         </div>
 
         <div className="chart-frame">
-          {!chartSeries ? (
-            <p className="chart-loading">Loading prices…</p>
-          ) : (
+          {!chartTicker && <p className="chart-loading">Search for a stock, then press Load chart.</p>}
+          {chartTicker && !dataReady && <LoadingNote data={data} what={`${chartStock.company} prices`} />}
+          {dataReady && !chartSeries && <p className="chart-loading">Loading prices…</p>}
+          {chartSeries && (
             <PriceChart
               series={chartSeries}
               interval={priceInterval}

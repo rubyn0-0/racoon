@@ -791,3 +791,73 @@ button.danger {
   font-size: var(--text-small);
   font-weight: 600;
 }
+
+/* Stock search box */
+
+.stock-search {
+  position: relative;
+}
+
+.search-results {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  left: 0;
+  right: 0;
+  min-width: 280px;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  border: var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.search-results li {
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+}
+
+.search-results li.active,
+.search-results li:hover {
+  background: var(--ground);
+}
+
+.chart-loading .quiet,
+.error .quiet {
+  margin-left: 12px;
+}
+
+.share-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px 16px;
+}
+
+/* TEMPORARY: the red load-everything test button (TestLoader.jsx) */
+
+.test-loader {
+  margin-bottom: 24px;
+}
+
+.test-button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid #ff3b30;
+  border-radius: var(--radius-control);
+  background: #d70015;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.test-button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: progress;
+}
+
+.test-loader tr.mismatch td {
+  color: #ff9a92;
+}

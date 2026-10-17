@@ -1,20 +1,29 @@
+import time
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from racoon.analysis import INTERVALS, add_moving_averages, aggregate, parse_windows, to_records
 from racoon.db import get_conn, init_db
+from racoon.loader import debug_snapshot, ensure, seed_companies
 from racoon.portfolios import router as portfolios_router
+
+PRICE_ROWS = ("date", "open", "high", "low", "close", "adjusted_close", "volume", "dividends", "stock_splits")
+MAX_ENSURE = 60  # more than the ticker list holds
+GZIP_MINIMUM_BYTES = 1000
 
 
 @asynccontextmanager
 async def lifespan(app):
-    init_db()  # creates new tables (e.g. portfolios) on an existing database
+    init_db()  # creates new tables and columns on an existing database
+    seed_companies()  # every company in the ticker list exists from the start; prices load on demand
     yield
 
 
@@ -24,13 +33,30 @@ DEFAULT_INTERVAL = INTERVALS[0]
 
 app = FastAPI(lifespan=lifespan)
 
+app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_BYTES)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=FRONTEND_ORIGINS,
     allow_methods=ALLOWED_METHODS,
     allow_headers=["*"],
+    expose_headers=["Server-Timing"],
 )
+
+
+@app.middleware("http")
+async def server_timing(request: Request, call_next):
+    """Time every request; the browser's network tab shows it as Server-Timing."""
+    started = time.perf_counter()
+    response = await call_next(request)
+    response.headers["Server-Timing"] = f"total;dur={(time.perf_counter() - started) * 1000:.0f}"
+    return response
+
+
 app.include_router(portfolios_router)
+
+
+class EnsureIn(BaseModel):
+    tickers: list[str] = Field(min_length=1, max_length=MAX_ENSURE)
 
 
 @app.get("/api/health")
@@ -41,17 +67,49 @@ def health(conn=Depends(get_conn)):
 
 @app.get("/api/stocks")
 def list_stocks(conn=Depends(get_conn)):
+    """Every company, SMI members first, with a summary of the history stored for it (none until loaded)."""
     rows = conn.execute(text("""
-        SELECT c.ticker, c.name AS company, c.market_cap, c.shares_outstanding,
-               to_char(min(p.date), 'YYYY-MM-DD') AS start_date,
-               to_char(max(p.date), 'YYYY-MM-DD') AS end_date,
-               count(p.date) AS count
-        FROM companies c
-        JOIN prices p ON p.ticker = c.ticker
-        GROUP BY c.ticker, c.name, c.market_cap, c.shares_outstanding
-        ORDER BY c.name
+        SELECT ticker, name AS company, in_smi, market_cap, shares_outstanding,
+               to_char(price_start, 'YYYY-MM-DD') AS start_date,
+               to_char(price_end, 'YYYY-MM-DD') AS end_date,
+               price_count AS count,
+               (price_count > 0 AND full_history) AS loaded
+        FROM companies
+        ORDER BY in_smi DESC, name
     """)).mappings()
     return [dict(row) for row in rows]
+
+
+@app.post("/api/stocks/ensure")
+def ensure_stocks(body: EnsureIn):
+    """Start loading missing or old prices for these tickers and report progress. Call again to poll."""
+    return ensure(list(dict.fromkeys(body.tickers)))
+
+
+# TEMPORARY, for checking the on-demand loader (remove together with TestLoader.jsx).
+@app.get("/api/debug/loading")
+def debug_loading():
+    """Per company: the rows really in the prices table, the stored summary next to it, and the last load job."""
+    return debug_snapshot()
+
+
+@app.get("/api/prices/on")
+def prices_on(
+    tickers: str = Query(description="Comma separated yahoo tickers"),
+    on: date = Query(description="Day to value them on"),
+    conn=Depends(get_conn),
+):
+    """The close on (or just before) a day for each ticker; one small query for the starting-position value."""
+    rows = conn.execute(
+        text("""
+            SELECT DISTINCT ON (ticker) ticker, close
+            FROM prices
+            WHERE ticker = ANY(:tickers) AND date <= :on AND close IS NOT NULL
+            ORDER BY ticker, date DESC
+        """),
+        {"tickers": tickers.split(","), "on": on},
+    ).all()
+    return {ticker: close for ticker, close in rows}
 
 
 @app.get("/api/stocks/{ticker}/prices")
@@ -69,21 +127,17 @@ def get_prices(
         raise HTTPException(status_code=422, detail=str(error))
 
     rows = conn.execute(
-        text("""
-            SELECT to_char(date, 'YYYY-MM-DD') AS date,
-                   open, high, low, close, adjusted_close,
-                   volume, dividends, stock_splits
-            FROM prices
-            WHERE ticker = :ticker
-            ORDER BY date
-        """),
+        text(f"SELECT to_char(date, 'YYYY-MM-DD'), {', '.join(PRICE_ROWS[1:])} FROM prices WHERE ticker = :ticker ORDER BY date"),
         {"ticker": ticker},
-    ).mappings().all()
+    ).all()
 
     if not rows:
+        known = conn.execute(text("SELECT 1 FROM companies WHERE ticker = :ticker"), {"ticker": ticker}).first()
+        if known:
+            raise HTTPException(status_code=409, detail=f"Prices for {ticker} are still loading")
         raise HTTPException(status_code=404, detail=f"No prices found for {ticker}")
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=list(PRICE_ROWS))
     numeric = df.columns.drop("date")
     df[numeric] = df[numeric].apply(pd.to_numeric, errors="coerce")
     df = add_moving_averages(aggregate(df, interval), windows)

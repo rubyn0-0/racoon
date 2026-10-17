@@ -148,7 +148,7 @@ export const WEIGHTING_HELP = {
   [WEIGHTING.EQUAL]: 'Every stock gets the same share of the money.',
   [WEIGHTING.MARKET_CAP]: 'Bigger companies get a bigger share, capped at 20% each like the SMI. The cap applies from 5 stocks.',
   [WEIGHTING.MANUAL]: 'Give every stock a percentage. They must add up to 100%, so free some percent in one stock before using it in another.',
-  [WEIGHTING.OWNERSHIP]: 'You own the same percentage of every company, so bigger companies get a bigger share of the money. The share counts stay in that ratio as prices move. Needs the share count of each company (run the ingest).',
+  [WEIGHTING.OWNERSHIP]: 'You own the same percentage of every company, so bigger companies get a bigger share of the money. The share counts stay in that ratio as prices move. The share count of each company is loaded together with its prices.',
 }
 // Your weights: the percentages must add up to this, and move in steps of WEIGHT_STEP.
 export const WEIGHT_TOTAL = 100
@@ -161,15 +161,14 @@ export const COPY_SUFFIX = ' (copy)'
 // How many portfolios the compare screen takes (mirrored in the backend).
 export const MIN_COMPARE = 2
 export const MAX_COMPARE = 6
-export const COMPARE_DEFAULTS = { initial: '10000', inflow: '0', inflowFrequency: 'monthly' }
+// Starting capital: the cash a portfolio invests on its first day (a string, as it comes from an <input>).
+export const INITIAL_CAPITAL_DEFAULT = '10000'
+export const CAPITAL_STEP = 100
+export const COMPARE_DEFAULTS = { initial: INITIAL_CAPITAL_DEFAULT, inflow: '0', inflowFrequency: 'monthly' }
 // Mirrors the API limit on a portfolio name (NAME_MAX_LENGTH in the backend).
 export const PORTFOLIO_NAME_MAX_LENGTH = 80
 // How long the editor waits after you stop typing before it asks the backend for the resulting weights.
 export const PREVIEW_DEBOUNCE_MS = 300
-
-// Backtest form. Inputs are strings because they come from <input>, and the API accepts them as given.
-export const BACKTEST_DEFAULTS = { initial: '10000' }
-export const BACKTEST_STEPS = { initial: 100 }
 
 // Portfolio rules: how often cash is turned into shares, and how often new money arrives.
 export const INVEST_FREQUENCIES = [
@@ -189,6 +188,15 @@ export const NEVER_INVEST = 'never'
 export const DEFAULT_INVEST_FREQUENCY = 'monthly'
 export const DEFAULT_INFLOW_FREQUENCY = 'monthly'
 export const INFLOW_STEP = 50
+
+// Loading prices on demand and drawing long histories.
+export const LOAD_POLL_MS = 1000
+// Above this many candles in view the chart draws a closing-price line instead (it stays fast).
+export const MAX_DRAWN_CANDLES = 1500
+// Extra room kept on each side of the visible range, as a share of it, so panning never shows a gap.
+export const WINDOW_PADDING = 0.25
+export const ZOOMED_OUT_NOTE = 'Zoomed out: showing closing prices. Zoom in to see the candles.'
+export const SEARCH_RESULTS = 8
 
 // Messages.
 // Shown in place of the end date in the price header when the chart reaches the latest data.
