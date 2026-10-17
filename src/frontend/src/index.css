@@ -1,0 +1,19 @@
+:root {
+  color: var(--ink);
+  background: var(--ground);
+  color-scheme: dark;
+  font-family: var(--font);
+  font-synthesis: none;
+  line-height: 1.45;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--ground);
+}
