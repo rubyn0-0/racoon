@@ -7,10 +7,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from racoon.backtest import backtest, target_weights
+from racoon.backtest import MANUAL, MARKET_CAP, WEIGHTINGS, backtest, target_weights
 from racoon.db import get_conn
 
 router = APIRouter(prefix="/api/portfolios", tags=["portfolios"])
+
+MAX_HOLDINGS = 30
+NAME_MAX_LENGTH = 80  # the frontend mirrors this as PORTFOLIO_NAME_MAX_LENGTH
+DUPLICATE_NAME_ERROR = "A portfolio with this name already exists."
+CURRENCY = "CHF"
 
 
 class HoldingIn(BaseModel):
@@ -19,12 +24,12 @@ class HoldingIn(BaseModel):
 
 
 class WeightsIn(BaseModel):
-    weighting: Literal["manual", "equal", "market_cap"]
-    holdings: list[HoldingIn] = Field(min_length=1, max_length=30)
+    weighting: Literal[WEIGHTINGS]
+    holdings: list[HoldingIn] = Field(min_length=1, max_length=MAX_HOLDINGS)
 
 
 class PortfolioIn(WeightsIn):
-    name: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
 
 
 def resolve_holdings(conn, weighting, holdings):
@@ -32,7 +37,7 @@ def resolve_holdings(conn, weighting, holdings):
     tickers = [holding["ticker"] for holding in holdings]
     if len(set(tickers)) != len(tickers):
         raise HTTPException(status_code=422, detail="Each stock can only be added once.")
-    if weighting == "manual" and any(holding["weight"] is None for holding in holdings):
+    if weighting == MANUAL and any(holding["weight"] is None for holding in holdings):
         raise HTTPException(status_code=422, detail="Give every stock a weight, or pick another weighting.")
 
     rows = conn.execute(
@@ -46,7 +51,7 @@ def resolve_holdings(conn, weighting, holdings):
         raise HTTPException(status_code=422, detail=f"Unknown stock: {', '.join(unknown)}")
 
     market_caps = {ticker: companies[ticker]["market_cap"] for ticker in tickers}
-    if weighting == "market_cap":
+    if weighting == MARKET_CAP:
         missing = [companies[ticker]["name"] for ticker in tickers if not market_caps[ticker]]
         if missing:
             raise HTTPException(
@@ -59,7 +64,7 @@ def resolve_holdings(conn, weighting, holdings):
         {
             "ticker": holding["ticker"],
             "company": companies[holding["ticker"]]["name"],
-            "weight": holding["weight"] if weighting == "manual" else None,
+            "weight": holding["weight"] if weighting == MANUAL else None,
             "target_weight": weights[holding["ticker"]],
         }
         for holding in holdings
@@ -93,7 +98,7 @@ def save_holdings(conn, portfolio_id, body):
             {
                 "id": portfolio_id,
                 "ticker": holding.ticker,
-                "weight": holding.weight if body.weighting == "manual" else None,
+                "weight": holding.weight if body.weighting == MANUAL else None,
             }
             for holding in body.holdings
         ],
@@ -105,7 +110,7 @@ def commit_or_conflict(conn):
         conn.commit()
     except IntegrityError:
         conn.rollback()
-        raise HTTPException(status_code=409, detail="A portfolio with this name already exists.")
+        raise HTTPException(status_code=409, detail=DUPLICATE_NAME_ERROR)
 
 
 @router.get("")
@@ -130,7 +135,7 @@ def create_portfolio(body: PortfolioIn, conn=Depends(get_conn)):
         ).scalar_one()
     except IntegrityError:
         conn.rollback()
-        raise HTTPException(status_code=409, detail="A portfolio with this name already exists.")
+        raise HTTPException(status_code=409, detail=DUPLICATE_NAME_ERROR)
 
     save_holdings(conn, portfolio_id, body)
     commit_or_conflict(conn)
@@ -153,7 +158,7 @@ def update_portfolio(portfolio_id: int, body: PortfolioIn, conn=Depends(get_conn
         )
     except IntegrityError:
         conn.rollback()
-        raise HTTPException(status_code=409, detail="A portfolio with this name already exists.")
+        raise HTTPException(status_code=409, detail=DUPLICATE_NAME_ERROR)
 
     save_holdings(conn, portfolio_id, body)
     commit_or_conflict(conn)
@@ -173,8 +178,8 @@ def run_backtest(
     portfolio_id: int,
     start: date | None = None,
     end: date | None = None,
-    initial: float = Query(10000, ge=0, description="CHF invested on the first day"),
-    monthly: float = Query(0, ge=0, description="CHF added on the first trading day of each month"),
+    initial: float = Query(10000, ge=0, description=f"{CURRENCY} invested on the first day"),
+    monthly: float = Query(0, ge=0, description=f"{CURRENCY} added on the first trading day of each month"),
     reinvest: bool = True,
     conn=Depends(get_conn),
 ):

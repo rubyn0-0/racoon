@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from racoon.analysis import add_moving_averages, aggregate, parse_windows, to_records
+from racoon.analysis import INTERVALS, add_moving_averages, aggregate, parse_windows, to_records
 from racoon.db import get_conn, init_db
 from racoon.portfolios import router as portfolios_router
 
@@ -18,12 +18,16 @@ async def lifespan(app):
     yield
 
 
+FRONTEND_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]  # the Vite dev server
+ALLOWED_METHODS = ["GET", "POST", "PUT", "DELETE"]
+DEFAULT_INTERVAL = INTERVALS[0]
+
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_origins=FRONTEND_ORIGINS,
+    allow_methods=ALLOWED_METHODS,
     allow_headers=["*"],
 )
 app.include_router(portfolios_router)
@@ -53,7 +57,7 @@ def list_stocks(conn=Depends(get_conn)):
 @app.get("/api/stocks/{ticker}/prices")
 def get_prices(
     ticker: str,
-    interval: Literal["day", "week", "month", "year"] = "day",
+    interval: Literal[INTERVALS] = DEFAULT_INTERVAL,
     ma: str | None = None,
     start: date | None = None,
     end: date | None = None,

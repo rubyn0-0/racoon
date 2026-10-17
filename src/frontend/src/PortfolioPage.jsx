@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
 import { fetchPortfolios } from './api'
 import BacktestPanel from './BacktestPanel'
+import { NEW_PORTFOLIO, weightingById } from './shared'
 import PortfolioEditor from './PortfolioEditor'
-
-const weightingNames = { manual: 'Your weights', equal: 'Equal weight', market_cap: 'Market cap' }
 
 function PortfolioPage({ stocks }) {
   const [portfolios, setPortfolios] = useState(null)
-  const [selectedId, setSelectedId] = useState('new')
+  const [selectedId, setSelectedId] = useState(NEW_PORTFOLIO)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -32,7 +31,7 @@ function PortfolioPage({ stocks }) {
   function handleDeleted(id) {
     const remaining = portfolios.filter((portfolio) => portfolio.id !== id)
     setPortfolios(remaining)
-    setSelectedId(remaining[0]?.id ?? 'new')
+    setSelectedId(remaining[0]?.id ?? NEW_PORTFOLIO)
   }
 
   if (error) return <p className="error" role="alert">{error}</p>
@@ -43,8 +42,8 @@ function PortfolioPage({ stocks }) {
       <aside className="portfolio-list" aria-label="Saved portfolios">
         <button
           type="button"
-          className={selectedId === 'new' ? 'list-item active' : 'list-item'}
-          onClick={() => setSelectedId('new')}
+          className={selectedId === NEW_PORTFOLIO ? 'list-item active' : 'list-item'}
+          onClick={() => setSelectedId(NEW_PORTFOLIO)}
         >
           <span className="list-title">New portfolio</span>
         </button>
@@ -58,7 +57,7 @@ function PortfolioPage({ stocks }) {
           >
             <span className="list-title">{portfolio.name}</span>
             <span className="list-meta">
-              {portfolio.holdings.length} {portfolio.holdings.length === 1 ? 'stock' : 'stocks'}, {weightingNames[portfolio.weighting].toLowerCase()}
+              {portfolio.holdings.length} {portfolio.holdings.length === 1 ? 'stock' : 'stocks'}, {weightingById[portfolio.weighting].name.toLowerCase()}
             </span>
           </button>
         ))}
@@ -67,7 +66,7 @@ function PortfolioPage({ stocks }) {
       <div className="portfolio-main">
         <PortfolioEditor
           // A fresh editor per portfolio, so switching never mixes two drafts.
-          key={selected?.id ?? 'new'}
+          key={selected?.id ?? NEW_PORTFOLIO}
           stocks={stocks}
           portfolio={selected}
           onSaved={handleSaved}

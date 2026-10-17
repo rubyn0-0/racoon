@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react'
 import { fetchBacktest } from './api'
 import BacktestChart from './BacktestChart'
-import { chf, percent, signedPercent } from './format'
+import {
+  BACKTEST_DEFAULTS,
+  BACKTEST_STEPS,
+  CURRENCY,
+  START_BEFORE_END_ERROR,
+  changeClass,
+  chf,
+  percent,
+  signedPercent,
+} from './shared'
 
 // The backtest can only start once every holding has prices, and end when the first one stops.
 function commonRange(stocks, portfolio) {
@@ -58,7 +67,7 @@ function BacktestResult({ result }) {
         <span className="tile-label">Value on {summary.end_date}</span>
         <span className="hero-value">{chf(summary.final_value)}</span>
         <span className="hero-delta">
-          <span className={summary.gain >= 0 ? 'change up' : 'change down'}>{signedPercent(summary.gain_pct)}</span>
+          <span className={changeClass(summary.gain)}>{signedPercent(summary.gain_pct)}</span>
           <span className="muted">on {chf(summary.invested)} paid in since {summary.start_date}</span>
         </span>
       </div>
@@ -110,9 +119,7 @@ function BacktestResult({ result }) {
 function BacktestPanel({ stocks, portfolio }) {
   const [defaults] = useState(() => ({
     ...commonRange(stocks, portfolio),
-    initial: '10000',
-    monthly: '0',
-    reinvest: true,
+    ...BACKTEST_DEFAULTS,
   }))
   const [settings, setSettings] = useState(defaults)
   const [result, setResult] = useState(null)
@@ -139,7 +146,7 @@ function BacktestPanel({ stocks, portfolio }) {
     event.preventDefault()
 
     if (settings.start > settings.end) {
-      setError('The start date must be before the end date.')
+      setError(START_BEFORE_END_ERROR)
       return
     }
 
@@ -172,12 +179,12 @@ function BacktestPanel({ stocks, portfolio }) {
           <input type="date" value={settings.end} min={defaults.start} max={defaults.end} onChange={(event) => update('end', event.target.value)} />
         </label>
         <label className="field">
-          Starting amount (CHF)
-          <input type="number" min="0" step="100" value={settings.initial} onChange={(event) => update('initial', event.target.value)} />
+          Starting amount ({CURRENCY})
+          <input type="number" min="0" step={BACKTEST_STEPS.initial} value={settings.initial} onChange={(event) => update('initial', event.target.value)} />
         </label>
         <label className="field">
-          Monthly amount (CHF)
-          <input type="number" min="0" step="50" value={settings.monthly} onChange={(event) => update('monthly', event.target.value)} />
+          Monthly amount ({CURRENCY})
+          <input type="number" min="0" step={BACKTEST_STEPS.monthly} value={settings.monthly} onChange={(event) => update('monthly', event.target.value)} />
         </label>
         <div className="backtest-actions">
           <label className="check">

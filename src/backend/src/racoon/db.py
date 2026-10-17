@@ -4,7 +4,10 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import create_engine, text
 
+from racoon.backtest import WEIGHTINGS
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+WEIGHTING_VALUES = ", ".join(f"'{name}'" for name in WEIGHTINGS)
 
 
 class Settings(BaseSettings):
@@ -54,11 +57,11 @@ def init_db():
         connection.execute(text(
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS market_cap DOUBLE PRECISION"
         ))
-        connection.execute(text("""
+        connection.execute(text(f"""
             CREATE TABLE IF NOT EXISTS portfolios (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
-                weighting TEXT NOT NULL CHECK (weighting IN ('manual', 'equal', 'market_cap')),
+                weighting TEXT NOT NULL CHECK (weighting IN ({WEIGHTING_VALUES})),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
         """))

@@ -1,18 +1,13 @@
-/* Chart colors are mirrored in chartTheme.js for Plotly; keep both in sync. */
+/* Colors and the font come from chart.js (applyThemeVariables); only layout tokens live here. */
 :root {
-  --ground: #f4f6f9;
-  --surface: #ffffff;
-  --ink: #161b22;
-  --muted: #5e6877;
-  --hairline: #e2e6ec;
-  --accent: #2747d8;
-  --up: #118a68;
-  --down: #d23b2e;
-  --value: #2747d8;
-  --invested: #c27a00;
-  --error-bg: #fdf1f0;
   --radius-control: 6px;
   --radius-card: 12px;
+  --radius-small: 4px;
+  --radius-tiny: 2px;
+  --border: 1px solid var(--hairline);
+  --text-small: 0.8125rem;
+  --disabled-opacity: 0.45;
+  --space-card: 24px;
 }
 
 .app {
@@ -75,7 +70,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-small);
   font-weight: 500;
 }
 
@@ -90,7 +85,7 @@ button {
 select,
 input {
   padding: 0 12px;
-  border: 1px solid var(--hairline);
+  border: var(--border);
   background: var(--surface);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -109,7 +104,7 @@ button.primary {
 }
 
 button.primary:hover {
-  background: #2b323d;
+  background: var(--button-hover);
 }
 
 :focus-visible {
@@ -123,14 +118,14 @@ button.primary:hover {
   border-left: 3px solid var(--down);
   border-radius: var(--radius-control);
   background: var(--error-bg);
-  color: #8f2219;
+  color: var(--error-text);
 }
 
 /* Chart card */
 
 .chart-card {
-  padding: 24px;
-  border: 1px solid var(--hairline);
+  padding: var(--space-card);
+  border: var(--border);
   border-radius: var(--radius-card);
   background: var(--surface);
 }
@@ -193,7 +188,6 @@ button.primary:hover {
 }
 
 .muted,
-.hint,
 .chart-loading {
   color: var(--muted);
   font-size: 0.875rem;
@@ -215,15 +209,11 @@ button.primary:hover {
   justify-content: space-between;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--hairline);
-}
-
-.hint {
-  margin: 0 0 12px;
+  border-top: var(--border);
 }
 
 .chart-frame {
-  min-height: 440px;
+  min-height: var(--chart-height);
 }
 
 .chart-loading {
@@ -242,14 +232,14 @@ button.primary:hover {
 
 .option-label {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-small);
   font-weight: 500;
 }
 
 .segmented {
   display: flex;
   flex-wrap: wrap;
-  border: 1px solid var(--hairline);
+  border: var(--border);
   border-radius: var(--radius-control);
 }
 
@@ -264,7 +254,7 @@ button.primary:hover {
 }
 
 .segment + .segment {
-  border-left: 1px solid var(--hairline);
+  border-left: var(--border);
 }
 
 .segment:first-child {
@@ -296,7 +286,7 @@ button.primary:hover {
 
 .segment:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
 }
 
 @media (max-width: 760px) {
@@ -368,7 +358,7 @@ button.primary:hover {
 
 .list-meta {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-small);
 }
 
 .portfolio-main {
@@ -378,8 +368,8 @@ button.primary:hover {
 }
 
 .panel {
-  padding: 24px;
-  border: 1px solid var(--hairline);
+  padding: var(--space-card);
+  border: var(--border);
   border-radius: var(--radius-card);
   background: var(--surface);
 }
@@ -406,7 +396,7 @@ button.primary:hover {
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-small);
   font-weight: 500;
 }
 
@@ -452,16 +442,16 @@ button.primary:hover {
 
 .holdings-table th {
   padding: 8px 12px 8px 0;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: var(--border);
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-small);
   font-weight: 500;
   text-align: left;
 }
 
 .holdings-table td {
   padding: 8px 12px 8px 0;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: var(--border);
 }
 
 .holdings-table .number {
@@ -488,14 +478,14 @@ button.primary:hover {
   width: 120px;
   height: 8px;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: var(--radius-small);
   background: var(--ground);
 }
 
 .share-bar span {
   display: block;
   height: 100%;
-  border-radius: 4px;
+  border-radius: var(--radius-small);
   background: var(--accent);
 }
 
@@ -508,12 +498,12 @@ button.primary:hover {
 
 .primary:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
 }
 
 button.quiet {
   padding: 0 12px;
-  border: 1px solid var(--hairline);
+  border: var(--border);
   background: var(--surface);
   color: var(--ink);
 }
@@ -595,13 +585,13 @@ button.danger {
   gap: 4px;
   align-content: start;
   padding: 14px 16px;
-  border: 1px solid var(--hairline);
+  border: var(--border);
   border-radius: var(--radius-control);
 }
 
 .tile-label {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-small);
   font-weight: 500;
 }
 
@@ -613,7 +603,7 @@ button.danger {
 
 .tile-note {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-small);
 }
 
 .share-split-title {
@@ -629,7 +619,7 @@ button.danger {
 }
 
 .split-bar span {
-  border-radius: 4px;
+  border-radius: var(--radius-small);
 }
 
 .split-own,
@@ -658,7 +648,7 @@ button.danger {
   width: 10px;
   height: 10px;
   margin-right: 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-tiny);
 }
 
 @media (max-width: 900px) {

@@ -1,26 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchPrices } from './api'
 import ChartHeader from './ChartHeader'
-import { averageWindows, theme } from './chartTheme'
+import {
+  AVERAGE_OPTIONS,
+  CHART_MODE,
+  CHART_MODES,
+  CHART_TYPES,
+  DAILY_INTERVAL,
+  DEFAULT_CHART_MODE,
+  DEFAULT_CHART_TYPE,
+  DEFAULT_INTERVAL,
+  INTERVALS,
+  START_BEFORE_END_ERROR,
+  dataBounds,
+  dateOnly,
+  utcMidnight,
+} from './shared'
 import OptionButtons from './OptionButtons'
 import PriceChart from './PriceChart'
 
-const chartTypes = [
-  { id: 'candles', label: 'Candles' },
-  { id: 'line', label: 'Line' },
-]
-const priceIntervals = [
-  { id: 'day', label: 'Day' },
-  { id: 'week', label: 'Week' },
-  { id: 'month', label: 'Month' },
-  { id: 'year', label: 'Year' },
-]
-const chartModes = [
-  { id: 'free-pan', label: 'Free pan' },
-  { id: 'full-range', label: 'Full range' },
-  { id: 'fitted', label: 'Fitted' },
-]
-const averageOptions = averageWindows.map((window) => ({ id: window, label: `MA ${window}` }))
 const periods = [
   { id: '1M', label: '1M', months: 1 },
   { id: '3M', label: '3M', months: 3 },
@@ -35,19 +33,13 @@ function periodStart(period, endDate, earliestDate) {
   if (period.id === 'max') return earliestDate
   if (period.id === 'YTD') return `${endDate.slice(0, 4)}-01-01`
 
-  const date = new Date(`${endDate}T00:00:00Z`)
+  const date = utcMidnight(endDate)
   date.setUTCMonth(date.getUTCMonth() - period.months)
-  return date.toISOString().slice(0, 10)
+  return dateOnly(date.toISOString())
 }
 
 function StockExplorer({ stocks }) {
   const initialStock = stocks[0]
-  const colorsByTicker = useMemo(
-    () => Object.fromEntries(
-      stocks.map((stock, index) => [stock.ticker, theme.lines[index % theme.lines.length]]),
-    ),
-    [stocks],
-  )
   const [ticker, setTicker] = useState(initialStock.ticker)
   const [startDate, setStartDate] = useState(initialStock.start_date)
   const [endDate, setEndDate] = useState(initialStock.end_date)
@@ -59,12 +51,13 @@ function StockExplorer({ stocks }) {
     initialStock.start_date,
     initialStock.end_date,
   ])
-  const [chartType, setChartType] = useState('candles')
-  const [chartMode, setChartMode] = useState('fitted')
-  const [priceInterval, setPriceInterval] = useState('day')
+  const [chartType, setChartType] = useState(DEFAULT_CHART_TYPE)
+  const [chartMode, setChartMode] = useState(DEFAULT_CHART_MODE)
+  const [priceInterval, setPriceInterval] = useState(DEFAULT_INTERVAL)
   const [averages, setAverages] = useState([])
   const [showVolume, setShowVolume] = useState(false)
-  const [graphTickers, setGraphTickers] = useState([initialStock.ticker])
+  // The form edits `ticker`; the chart only switches to it on Load chart.
+  const [chartTicker, setChartTicker] = useState(initialStock.ticker)
   const [seriesByKey, setSeriesByKey] = useState({})
   const [error, setError] = useState('')
   const requests = useRef({})
@@ -87,29 +80,19 @@ function StockExplorer({ stocks }) {
   }
 
   useEffect(() => {
-    graphTickers.forEach((graphTicker) => {
-      ensureSeries(graphTicker, priceInterval)
-        .catch((err) => setError(`Could not load prices: ${err.message}`))
-    })
-  }, [graphTickers, priceInterval])
+    ensureSeries(chartTicker, priceInterval)
+      .catch((err) => setError(`Could not load prices: ${err.message}`))
+  }, [chartTicker, priceInterval])
 
   const selectedStock = stocks.find((stock) => stock.ticker === ticker)
-  const graphStocks = stocks.filter((stock) => graphTickers.includes(stock.ticker))
-  const chartSeries = graphStocks
-    .filter((stock) => seriesByKey[`${stock.ticker}:${priceInterval}`])
-    .map((stock) => ({ stock, prices: seriesByKey[`${stock.ticker}:${priceInterval}`] }))
-  const comparing = graphStocks.length > 1
-  const earliestChartDate = graphStocks.reduce(
-    (earliest, stock) => stock.start_date < earliest ? stock.start_date : earliest,
-    graphStocks[0].start_date,
-  )
-  const latestChartDate = graphStocks.reduce(
-    (latest, stock) => stock.end_date > latest ? stock.end_date : latest,
-    graphStocks[0].end_date,
-  )
+  const chartStock = stocks.find((stock) => stock.ticker === chartTicker)
+  const chartPrices = seriesByKey[`${chartTicker}:${priceInterval}`]
+  const chartSeries = chartPrices ? { stock: chartStock, prices: chartPrices } : null
+  const earliestChartDate = chartStock.start_date
+  const latestChartDate = chartStock.end_date
   const revision = {
     x: `${selection.startDate}-${selection.endDate}-${chartMode}-${priceInterval}`,
-    y: `${chartMode}-${priceInterval}-${graphTickers.join('-')}`,
+    y: `${chartMode}-${priceInterval}-${chartTicker}`,
   }
 
   function applyRange(start, end) {
@@ -134,14 +117,14 @@ function StockExplorer({ stocks }) {
     event.preventDefault()
 
     if (startDate > endDate) {
-      setError('The start date must be before the end date.')
+      setError(START_BEFORE_END_ERROR)
       return
     }
 
     // Daily rows answer "is there any trading day in this range", whatever the interval.
     let dailyPrices
     try {
-      dailyPrices = await ensureSeries(ticker, 'day')
+      dailyPrices = await ensureSeries(ticker, DAILY_INTERVAL)
     } catch (err) {
       setError(`Could not load prices: ${err.message}`)
       return
@@ -152,7 +135,7 @@ function StockExplorer({ stocks }) {
       return
     }
 
-    setGraphTickers([ticker])
+    setChartTicker(ticker)
     applyRange(startDate, endDate)
   }
 
@@ -160,20 +143,6 @@ function StockExplorer({ stocks }) {
     const period = periods.find((item) => item.id === periodId)
     const start = periodStart(period, latestChartDate, earliestChartDate)
     applyRange(start < earliestChartDate ? earliestChartDate : start, latestChartDate)
-  }
-
-  function toggleGraphStock(nextTicker) {
-    setGraphTickers((currentTickers) => {
-      if (!currentTickers.includes(nextTicker)) {
-        return [...currentTickers, nextTicker]
-      }
-
-      if (currentTickers.length === 1) {
-        return currentTickers
-      }
-
-      return currentTickers.filter((currentTicker) => currentTicker !== nextTicker)
-    })
   }
 
   function toggleAverage(window) {
@@ -184,12 +153,23 @@ function StockExplorer({ stocks }) {
     ))
   }
 
+  // Outside free-pan the chart cannot go past the data (to the edges of the first and last candle, as on the axis). Zooming out
+  // past that must stop there; storing the overshoot would make the chart snap back on the next render.
+  function clampToData([start, end]) {
+    if (chartMode === CHART_MODE.FREE_PAN) return [start, end]
+
+    if (!chartPrices) return [start, end]
+
+    const [lowest, highest] = dataBounds(chartPrices, priceInterval)
+    return [start < lowest ? lowest : start, end > highest ? highest : end]
+  }
+
   function updateVisibleDateRange(event) {
     const nextStart = event['xaxis.range[0]']
     const nextEnd = event['xaxis.range[1]']
 
     if (nextStart && nextEnd) {
-      setVisibleDateRange([nextStart, nextEnd])
+      setVisibleDateRange(clampToData([nextStart, nextEnd]))
     } else if (event['xaxis.autorange']) {
       setVisibleDateRange([earliestChartDate, latestChartDate])
     }
@@ -240,54 +220,45 @@ function StockExplorer({ stocks }) {
       <section className="chart-card" aria-label="Price chart">
         <ChartHeader
           series={chartSeries}
-          startDate={selection.startDate}
-          endDate={selection.endDate}
+          startDate={visibleDateRange[0]}
+          endDate={visibleDateRange[1]}
         />
 
         <div className="chart-controls">
           <OptionButtons
             label="Chart type"
-            options={chartTypes}
+            options={CHART_TYPES}
             isActive={(id) => chartType === id}
             onSelect={setChartType}
-            disabled={comparing}
           />
           <OptionButtons
             label="Interval"
-            options={priceIntervals}
+            options={INTERVALS}
             isActive={(id) => priceInterval === id}
             onSelect={setPriceInterval}
           />
           <OptionButtons
             label="Moving averages"
-            options={averageOptions}
+            options={AVERAGE_OPTIONS}
             isActive={(id) => averages.includes(id)}
             onSelect={toggleAverage}
-            disabled={comparing}
           />
           <OptionButtons
             label="Volume"
             options={[{ id: 'volume', label: 'Volume' }]}
             isActive={() => showVolume}
             onSelect={() => setShowVolume((current) => !current)}
-            disabled={comparing}
           />
           <OptionButtons
             label="Price axis"
-            options={chartModes}
+            options={CHART_MODES}
             isActive={(id) => chartMode === id}
             onSelect={setChartMode}
           />
         </div>
 
-        {comparing && (
-          <p className="hint">
-            Candles, moving averages and volume work with one stock. Deselect the others to use them.
-          </p>
-        )}
-
         <div className="chart-frame">
-          {chartSeries.length === 0 ? (
+          {!chartSeries ? (
             <p className="chart-loading">Loading prices…</p>
           ) : (
             <PriceChart
@@ -302,7 +273,6 @@ function StockExplorer({ stocks }) {
               earliestDate={earliestChartDate}
               latestDate={latestChartDate}
               revision={revision}
-              colorFor={(graphTicker) => colorsByTicker[graphTicker]}
               onRelayout={updateVisibleDateRange}
             />
           )}
@@ -313,13 +283,6 @@ function StockExplorer({ stocks }) {
             label="Period"
             options={periods}
             onSelect={choosePeriod}
-          />
-          <OptionButtons
-            label="Stocks"
-            showLabel
-            options={stocks.map((stock) => ({ id: stock.ticker, label: stock.company }))}
-            isActive={(id) => graphTickers.includes(id)}
-            onSelect={toggleGraphStock}
           />
         </div>
       </section>

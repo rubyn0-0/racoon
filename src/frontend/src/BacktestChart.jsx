@@ -1,5 +1,23 @@
 import Plot from 'react-plotly.js'
-import { theme } from './chartTheme'
+import {
+  BACKTEST_HEIGHT,
+  CHART_FONT_SIZE,
+  LINE_WIDTH,
+  baseLayout,
+  baseXAxis,
+  baseYAxis,
+  legend,
+  margin,
+  plotConfig,
+  plotStyle,
+  theme,
+} from './chart'
+import { CURRENCY, DAILY_INTERVAL, intervalById } from './shared'
+
+const LEGEND_Y = 1.08
+const MARGIN_LEFT = 72
+const MARGIN_RIGHT = 64
+const END_LABEL_SHIFT = 6
 
 function endLabel(series, key, text, color) {
   const last = series[series.length - 1]
@@ -9,8 +27,8 @@ function endLabel(series, key, text, color) {
     text,
     showarrow: false,
     xanchor: 'left',
-    xshift: 6,
-    font: { family: theme.font, size: 12, color },
+    xshift: END_LABEL_SHIFT,
+    font: { family: theme.font, size: CHART_FONT_SIZE, color },
   }
 }
 
@@ -26,8 +44,8 @@ function BacktestChart({ series }) {
           name: 'Portfolio value',
           x,
           y: series.map((row) => row.value),
-          line: { color: theme.value, width: 2 },
-          hovertemplate: 'CHF %{y:,.0f}<extra>Portfolio value</extra>',
+          line: { color: theme.value, width: LINE_WIDTH },
+          hovertemplate: `${CURRENCY} %{y:,.0f}<extra>Portfolio value</extra>`,
         },
         {
           type: 'scatter',
@@ -36,39 +54,24 @@ function BacktestChart({ series }) {
           x,
           y: series.map((row) => row.invested),
           // Contributions arrive in steps, so draw them as steps.
-          line: { color: theme.invested, width: 2, dash: 'dash', shape: 'hv' },
-          hovertemplate: 'CHF %{y:,.0f}<extra>Money paid in</extra>',
+          line: { color: theme.invested, width: LINE_WIDTH, dash: 'dash', shape: 'hv' },
+          hovertemplate: `${CURRENCY} %{y:,.0f}<extra>Money paid in</extra>`,
         },
       ]}
       layout={{
-        autosize: true,
-        height: 360,
-        margin: { l: 72, r: 64, t: 8, b: 40 },
-        paper_bgcolor: 'white',
-        plot_bgcolor: 'white',
-        font: { family: theme.font, size: 12, color: theme.muted },
-        hovermode: 'x unified',
-        hoverlabel: { font: { family: theme.font, color: theme.ink }, bgcolor: 'white', bordercolor: theme.hairline },
+        ...baseLayout,
+        height: BACKTEST_HEIGHT,
+        margin: margin(MARGIN_LEFT, MARGIN_RIGHT),
         showlegend: true,
-        legend: { orientation: 'h', x: 0, y: 1.08, font: { color: theme.ink } },
-        dragmode: 'pan',
+        legend: legend(LEGEND_Y),
         xaxis: {
-          type: 'date',
-          showgrid: false,
-          showline: true,
-          linecolor: theme.hairline,
-          hoverformat: '%d %b %Y',
-          showspikes: true,
-          spikemode: 'across',
-          spikethickness: 1,
-          spikedash: 'dot',
-          spikecolor: theme.muted,
+          ...baseXAxis,
+          hoverformat: intervalById[DAILY_INTERVAL].hoverFormat,
         },
         yaxis: {
-          gridcolor: theme.hairline,
-          zeroline: false,
+          ...baseYAxis,
           rangemode: 'tozero',
-          tickprefix: 'CHF ',
+          tickprefix: `${CURRENCY} `,
           tickformat: ',.0f',
           fixedrange: true,
         },
@@ -77,8 +80,8 @@ function BacktestChart({ series }) {
           endLabel(series, 'invested', 'Paid in', theme.ink),
         ],
       }}
-      config={{ responsive: true, displaylogo: false, scrollZoom: true }}
-      style={{ width: '100%' }}
+      config={plotConfig}
+      style={plotStyle}
     />
   )
 }

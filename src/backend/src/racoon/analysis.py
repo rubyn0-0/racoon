@@ -5,6 +5,10 @@ MAX_WINDOWS = 5
 MIN_WINDOW, MAX_WINDOW = 2, 400
 
 
+def average_column(window):
+    return f"ma{window}"
+
+
 def parse_windows(value):
     """Turn "20,50,200" into [20, 50, 200]; raise ValueError on bad input."""
     if not value:
@@ -76,7 +80,7 @@ def add_moving_averages(df, windows):
     df = df.copy()
 
     for window in windows:
-        df[f"ma{window}"] = df["close"].rolling(window).mean()
+        df[average_column(window)] = df["close"].rolling(window).mean()
 
     return df
 

@@ -1,7 +1,8 @@
 :root {
-  color: #161b22;
-  background: #f4f6f9;
-  font-family: "Hanken Grotesk Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--ground);
+  color-scheme: dark;
+  font-family: var(--font);
   font-synthesis: none;
   line-height: 1.45;
   text-rendering: optimizeLegibility;
@@ -14,5 +15,5 @@
 body {
   margin: 0;
   min-width: 320px;
-  background: #f4f6f9;
+  background: var(--ground);
 }

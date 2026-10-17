@@ -1,19 +1,22 @@
 import { useEffect, useState } from 'react'
 import { deletePortfolio, previewWeights, savePortfolio } from './api'
-import { chfCompact, percent } from './format'
+import {
+  DEFAULT_WEIGHTING,
+  PORTFOLIO_NAME_MAX_LENGTH,
+  WEIGHTING,
+  WEIGHTINGS,
+  chfCompact,
+  percent,
+} from './shared'
 import OptionButtons from './OptionButtons'
 
-const weightings = [
-  { id: 'equal', label: 'Equal' },
-  { id: 'market_cap', label: 'Market cap (SMI style)' },
-  { id: 'manual', label: 'Your weights' },
-]
 const weightingHelp = {
-  equal: 'Every stock gets the same share of the money.',
-  market_cap: 'Bigger companies get a bigger share, capped at 20% each like the SMI. The cap applies from 5 stocks.',
-  manual: 'Enter any numbers; they are scaled to add up to 100%.',
+  [WEIGHTING.EQUAL]: 'Every stock gets the same share of the money.',
+  [WEIGHTING.MARKET_CAP]: 'Bigger companies get a bigger share, capped at 20% each like the SMI. The cap applies from 5 stocks.',
+  [WEIGHTING.MANUAL]: 'Enter any numbers; they are scaled to add up to 100%.',
 }
 const DEFAULT_WEIGHT = '10'
+const PREVIEW_DEBOUNCE_MS = 300
 
 function savedWeights(portfolio) {
   return Object.fromEntries(
@@ -23,7 +26,7 @@ function savedWeights(portfolio) {
 
 function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
   const [name, setName] = useState(portfolio?.name ?? '')
-  const [weighting, setWeighting] = useState(portfolio?.weighting ?? 'equal')
+  const [weighting, setWeighting] = useState(portfolio?.weighting ?? DEFAULT_WEIGHTING)
   const [weights, setWeights] = useState(() => savedWeights(portfolio))
   const [preview, setPreview] = useState({})
   const [previewError, setPreviewError] = useState('')
@@ -35,7 +38,7 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
   const tickers = Object.keys(weights)
   const holdings = tickers.map((ticker) => ({
     ticker,
-    weight: weighting === 'manual' ? Number(weights[ticker]) || null : null,
+    weight: weighting === WEIGHTING.MANUAL ? Number(weights[ticker]) || null : null,
   }))
   const draft = { name: name.trim(), weighting, holdings }
   const changed = !portfolio || JSON.stringify(draft) !== JSON.stringify({
@@ -43,7 +46,7 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
     weighting: portfolio.weighting,
     holdings: portfolio.holdings.map((holding) => ({
       ticker: holding.ticker,
-      weight: portfolio.weighting === 'manual' ? holding.weight : null,
+      weight: portfolio.weighting === WEIGHTING.MANUAL ? holding.weight : null,
     })),
   })
   const holdingsKey = JSON.stringify(holdings)
@@ -61,7 +64,7 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
           setPreviewError('')
         })
         .catch((err) => current && setPreviewError(err.message))
-    }, 300)
+    }, PREVIEW_DEBOUNCE_MS)
 
     return () => {
       current = false
@@ -129,7 +132,7 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
           <input
             type="text"
             value={name}
-            maxLength={80}
+            maxLength={PORTFOLIO_NAME_MAX_LENGTH}
             placeholder="For example: Swiss defensive"
             onChange={(event) => {
               setName(event.target.value)
@@ -142,7 +145,7 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
           <OptionButtons
             label="Weighting"
             showLabel
-            options={weightings}
+            options={WEIGHTINGS}
             isActive={(id) => weighting === id}
             onSelect={(id) => {
               setWeighting(id)
@@ -157,8 +160,8 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
             <thead>
               <tr>
                 <th scope="col">Stock</th>
-                {weighting === 'manual' && <th scope="col">Your weight</th>}
-                {weighting === 'market_cap' && <th scope="col" className="number">Market cap</th>}
+                {weighting === WEIGHTING.MANUAL && <th scope="col">Your weight</th>}
+                {weighting === WEIGHTING.MARKET_CAP && <th scope="col" className="number">Market cap</th>}
                 <th scope="col">Share of portfolio</th>
               </tr>
             </thead>
@@ -175,7 +178,7 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
                         {stock.company}
                       </label>
                     </td>
-                    {weighting === 'manual' && (
+                    {weighting === WEIGHTING.MANUAL && (
                       <td>
                         {included && (
                           <input
@@ -190,7 +193,7 @@ function PortfolioEditor({ stocks, portfolio, onSaved, onDeleted }) {
                         )}
                       </td>
                     )}
-                    {weighting === 'market_cap' && (
+                    {weighting === WEIGHTING.MARKET_CAP && (
                       <td className="number muted">{stock.market_cap ? chfCompact(stock.market_cap) : 'Not loaded'}</td>
                     )}
                     <td>

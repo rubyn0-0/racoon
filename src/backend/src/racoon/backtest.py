@@ -1,6 +1,7 @@
 """Portfolio weights and backtest simulation. Pure functions: no database, no HTTP."""
 
-WEIGHTINGS = ("manual", "equal", "market_cap")
+MANUAL, EQUAL, MARKET_CAP = "manual", "equal", "market_cap"
+WEIGHTINGS = (MANUAL, EQUAL, MARKET_CAP)
 SMI_CAP = 0.20  # the SMI caps every company at 20% of the index
 
 
@@ -33,18 +34,18 @@ def cap_weights(weights, cap=SMI_CAP):
 
 def target_weights(holdings, weighting, market_caps=None):
     """Weights summing to 1 for holdings [{ticker, weight}] under the given weighting."""
-    if weighting == "equal":
+    if weighting == EQUAL:
         raw = {holding["ticker"]: 1.0 for holding in holdings}
-    elif weighting == "manual":
+    elif weighting == MANUAL:
         raw = {holding["ticker"]: float(holding["weight"]) for holding in holdings}
-    elif weighting == "market_cap":
+    elif weighting == MARKET_CAP:
         raw = {holding["ticker"]: float(market_caps[holding["ticker"]]) for holding in holdings}
     else:
         raise ValueError(f"unknown weighting {weighting!r}")
 
     total = sum(raw.values())
     weights = {ticker: value / total for ticker, value in raw.items()}
-    return cap_weights(weights) if weighting == "market_cap" else weights
+    return cap_weights(weights) if weighting == MARKET_CAP else weights
 
 
 def backtest(closes, dividends, weights, initial, monthly, reinvest=True):
