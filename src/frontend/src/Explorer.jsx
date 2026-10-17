@@ -1,34 +1,84 @@
+// The price explorer screen: pick a stock and dates, then read the chart.
+// Chart controls and state live here; the chart itself is drawn in PriceChart.jsx.
+// Button labels, defaults and period buttons are in settings.js.
 import { useEffect, useRef, useState } from 'react'
 import { fetchPrices } from './api'
-import ChartHeader from './ChartHeader'
 import {
   AVERAGE_OPTIONS,
+  OptionButtons,
+  changeClass,
+  dataBounds,
+  dateOnly,
+  periodLabel,
+  price,
+  signedPercent,
+  utcMidnight,
+} from './helpers'
+import PriceChart from './PriceChart'
+import {
   CHART_MODE,
   CHART_MODES,
   CHART_TYPES,
+  CURRENCY,
   DAILY_INTERVAL,
   DEFAULT_CHART_MODE,
   DEFAULT_CHART_TYPE,
   DEFAULT_INTERVAL,
   INTERVALS,
+  PERIODS,
   START_BEFORE_END_ERROR,
-  dataBounds,
-  dateOnly,
-  utcMidnight,
-} from './shared'
-import OptionButtons from './OptionButtons'
-import PriceChart from './PriceChart'
+  TODAY_LABEL,
+} from './settings'
 
-const periods = [
-  { id: '1M', label: '1M', months: 1 },
-  { id: '3M', label: '3M', months: 3 },
-  { id: '6M', label: '6M', months: 6 },
-  { id: '1Y', label: '1Y', months: 12 },
-  { id: 'YTD', label: 'YTD' },
-  { id: '5Y', label: '5Y', months: 60 },
-  { id: 'max', label: 'Max' },
-]
+// The heading above the chart: stock name, latest price and change over the dates on screen.
+// The dates come from the chart, so the numbers follow zooming.
+function periodReadout(prices, startDate, endDate) {
+  // The visible range can be a Plotly axis string with a time, so compare whole days.
+  const firstDay = dateOnly(startDate)
+  const lastDay = dateOnly(endDate)
+  const inRange = prices.filter(
+    (row) => row.date >= firstDay && row.date <= lastDay && row.close != null,
+  )
 
+  if (inRange.length === 0) return null
+
+  const first = inRange[0]
+  const last = inRange[inRange.length - 1]
+  return { price: last.close, change: last.close / first.close - 1, first, last }
+}
+
+// 'from Week 3, 2024 to Week 42, 2026 (today)': the first and last candle on screen, named by the chosen interval.
+function rangeLabel(readout, interval, reachesLatest) {
+  const from = periodLabel(readout.first, interval)
+  if (!reachesLatest) return `from ${from} to ${periodLabel(readout.last, interval)}`
+  if (interval === DAILY_INTERVAL) return `from ${from} to ${TODAY_LABEL}`
+  return `from ${from} to ${periodLabel(readout.last, interval)} (${TODAY_LABEL})`
+}
+
+function PriceHeader({ series, interval, startDate, endDate, latestDate }) {
+  if (!series) return <div className="chart-header" />
+
+  const { stock, prices } = series
+  const readout = periodReadout(prices, startDate, endDate)
+
+  return (
+    <div className="chart-header">
+      <h2>{stock.company}</h2>
+      {readout && (
+        <p className="readout">
+          <strong>{CURRENCY} {price(readout.price)}</strong>
+          <span className={changeClass(readout.change)}>{signedPercent(readout.change)}</span>
+          <span className="muted">
+            {rangeLabel(readout, interval, dateOnly(endDate) >= latestDate)}
+          </span>
+        </p>
+      )}
+    </div>
+  )
+}
+
+
+// The screen itself: form, chart controls, chart and period buttons.
 function periodStart(period, endDate, earliestDate) {
   if (period.id === 'max') return earliestDate
   if (period.id === 'YTD') return `${endDate.slice(0, 4)}-01-01`
@@ -38,7 +88,7 @@ function periodStart(period, endDate, earliestDate) {
   return dateOnly(date.toISOString())
 }
 
-function StockExplorer({ stocks }) {
+function Explorer({ stocks }) {
   const initialStock = stocks[0]
   const [ticker, setTicker] = useState(initialStock.ticker)
   const [startDate, setStartDate] = useState(initialStock.start_date)
@@ -140,7 +190,7 @@ function StockExplorer({ stocks }) {
   }
 
   function choosePeriod(periodId) {
-    const period = periods.find((item) => item.id === periodId)
+    const period = PERIODS.find((item) => item.id === periodId)
     const start = periodStart(period, latestChartDate, earliestChartDate)
     applyRange(start < earliestChartDate ? earliestChartDate : start, latestChartDate)
   }
@@ -218,10 +268,12 @@ function StockExplorer({ stocks }) {
       {error && <p className="error" role="alert">{error}</p>}
 
       <section className="chart-card" aria-label="Price chart">
-        <ChartHeader
+        <PriceHeader
           series={chartSeries}
+          interval={priceInterval}
           startDate={visibleDateRange[0]}
           endDate={visibleDateRange[1]}
+          latestDate={latestChartDate}
         />
 
         <div className="chart-controls">
@@ -281,7 +333,7 @@ function StockExplorer({ stocks }) {
         <div className="chart-footer">
           <OptionButtons
             label="Period"
-            options={periods}
+            options={PERIODS}
             onSelect={choosePeriod}
           />
         </div>
@@ -290,4 +342,4 @@ function StockExplorer({ stocks }) {
   )
 }
 
-export default StockExplorer
+export default Explorer

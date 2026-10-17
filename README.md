@@ -16,16 +16,23 @@ src/
       api.py               FastAPI app
   frontend/                Vite + React + Plotly
     src/
-      App.jsx              loads the stock list
-      StockExplorer.jsx    the chart UI
+      main.jsx             starts the app: loads the stocks, shows the two tabs
+      settings.js          every colour, size, label and default you might want to change
+      helpers.jsx          number and date formatting, chart layout pieces, the button row
       api.js               calls to the backend
-      prices.js            day/week/month/year aggregation
+      Explorer.jsx         price explorer screen (form, controls, header)
+      PriceChart.jsx       the candle/line chart with moving averages and volume
+      Portfolios.jsx       saved portfolios and their editor
+      Compare.jsx          several portfolios side by side on the same days and money
+      Backtest.jsx         backtest form, results and chart
+      styles.css           all styling (colours come from settings.js)
 ```
 
 ## Setup
 1. `cd src/backend`, copy `.env.example` to `.env` and fill in `DATABASE_URL`.
 2. `uv sync`
 3. `uv run python -m racoon.ingest` (default: ABB, Nestlé, Novartis; or pass yahoo tickers from the CSV)
+   Re-run it after updating: it also loads each company's share count, which the "% of company" portfolio weighting needs.
 4. `cd src/frontend; npm install`
 
 ## Run

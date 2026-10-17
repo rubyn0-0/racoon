@@ -11,13 +11,14 @@ TICKERS_FILE = BACKEND_DIR / "data" / "six_stocks_tickers.csv"
 DEFAULT_TICKERS = ["ABBN.SW", "NESN.SW", "NOVN.SW"]
 
 UPSERT_COMPANY = text("""
-    INSERT INTO companies (ticker, name, exchange, country, market_cap)
-    VALUES (:ticker, :name, :exchange, :country, :market_cap)
+    INSERT INTO companies (ticker, name, exchange, country, market_cap, shares_outstanding)
+    VALUES (:ticker, :name, :exchange, :country, :market_cap, :shares_outstanding)
     ON CONFLICT (ticker) DO UPDATE SET
         name = EXCLUDED.name,
         exchange = EXCLUDED.exchange,
         country = EXCLUDED.country,
-        market_cap = COALESCE(EXCLUDED.market_cap, companies.market_cap)
+        market_cap = COALESCE(EXCLUDED.market_cap, companies.market_cap),
+        shares_outstanding = COALESCE(EXCLUDED.shares_outstanding, companies.shares_outstanding)
 """)
 
 UPSERT_PRICE = text("""
@@ -94,6 +95,14 @@ def fetch_market_cap(ticker):
         return None
 
 
+def fetch_shares_outstanding(ticker):
+    """Shares currently in issue (used for the equal-ownership weighting); None if Yahoo has none."""
+    try:
+        return number_or_none(yf.Ticker(ticker).fast_info["shares"])
+    except Exception:
+        return None
+
+
 def ingest(tickers):
     companies = load_companies()
     init_db()
@@ -108,14 +117,21 @@ def ingest(tickers):
             print(f"No data found for {ticker}")
             continue
 
-        company = {**companies[ticker], "market_cap": fetch_market_cap(ticker)}
+        company = {
+            **companies[ticker],
+            "market_cap": fetch_market_cap(ticker),
+            "shares_outstanding": fetch_shares_outstanding(ticker),
+        }
 
         with get_engine().begin() as connection:
             connection.execute(UPSERT_COMPANY, company)
             connection.execute(UPSERT_PRICE, prices)
 
         cap = f"market cap {company['market_cap']:,.0f}" if company["market_cap"] else "no market cap"
-        print(f"{ticker}: stored {len(prices)} rows, {cap}")
+        shares = (
+            f"{company['shares_outstanding']:,.0f} shares" if company["shares_outstanding"] else "no share count"
+        )
+        print(f"{ticker}: stored {len(prices)} rows, {cap}, {shares}")
 
 
 if __name__ == "__main__":

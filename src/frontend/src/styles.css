@@ -1,4 +1,24 @@
-/* Colors and the font come from chart.js (applyThemeVariables); only layout tokens live here. */
+:root {
+  color: var(--ink);
+  background: var(--ground);
+  color-scheme: dark;
+  font-family: var(--font);
+  font-synthesis: none;
+  line-height: 1.45;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--ground);
+}
+
+/* Colors and the font come from settings.js (applyThemeVariables in helpers.jsx); only layout tokens live here. */
 :root {
   --radius-control: 6px;
   --radius-card: 12px;
@@ -576,7 +596,7 @@ button.danger {
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
 }
 
@@ -679,4 +699,95 @@ button.danger {
   .danger-zone {
     margin-left: 0;
   }
+}
+
+/* Your weights editor, portfolio rules, and the backtest plan */
+
+.weight-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.weight-control input[type="range"] {
+  width: 140px;
+  accent-color: var(--accent);
+}
+
+.weight-control .quiet {
+  min-height: 28px;
+  padding: 0 6px;
+}
+
+.unallocated {
+  margin: 0 0 12px;
+  color: var(--invested);
+  font-size: var(--text-small);
+}
+
+.rules {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 12px 16px 16px;
+  border: var(--border);
+  border-radius: var(--radius-control);
+}
+
+.rules legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 24px;
+}
+
+.plan {
+  margin: 16px 0;
+  padding: var(--space-card);
+  border: var(--border);
+  border-radius: var(--radius-card);
+}
+
+.plan h3 {
+  margin: 0 0 8px;
+}
+
+.plan-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 12px 0;
+}
+
+.plan-progress {
+  display: inline-block;
+  flex: 1 1 200px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-small);
+  background: var(--ground);
+}
+
+.plan-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.badge {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: var(--radius-small);
+  background: var(--accent);
+  color: var(--ground);
+  font-size: var(--text-small);
+  font-weight: 600;
 }

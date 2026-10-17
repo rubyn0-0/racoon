@@ -42,13 +42,13 @@ def health(conn=Depends(get_conn)):
 @app.get("/api/stocks")
 def list_stocks(conn=Depends(get_conn)):
     rows = conn.execute(text("""
-        SELECT c.ticker, c.name AS company, c.market_cap,
+        SELECT c.ticker, c.name AS company, c.market_cap, c.shares_outstanding,
                to_char(min(p.date), 'YYYY-MM-DD') AS start_date,
                to_char(max(p.date), 'YYYY-MM-DD') AS end_date,
                count(p.date) AS count
         FROM companies c
         JOIN prices p ON p.ticker = c.ticker
-        GROUP BY c.ticker, c.name, c.market_cap
+        GROUP BY c.ticker, c.name, c.market_cap, c.shares_outstanding
         ORDER BY c.name
     """)).mappings()
     return [dict(row) for row in rows]

@@ -1,35 +1,45 @@
+// The price chart: candles or a line, moving averages and volume, drawn with Plotly.
+// Sizes, colors, line widths and padding are in settings.js; the screen around it is Explorer.jsx.
 import Plot from 'react-plotly.js'
 import {
-  CHART_HEIGHT,
-  LINE_WIDTH,
-  VOLUME_HEIGHT,
+  averageKey,
+  averageLabel,
   baseLayout,
   baseXAxis,
   baseYAxis,
-  legend,
-  margin,
-  plotConfig,
-  plotStyle,
-  theme,
-} from './chart'
-import {
-  CHART_MODE,
-  CHART_TYPE,
-  CURRENCY,
-  DAILY_INTERVAL,
-  averageKey,
-  averageLabel,
   candleCenter,
   dataBounds,
   dateOnly,
   intervalById,
+  legend,
+  margin,
   periodMs,
+  plotConfig,
+  plotStyle,
   utcMidnight,
-} from './shared'
+} from './helpers'
+import {
+  AVERAGE_LINE_WIDTH,
+  AXIS_HEADROOM,
+  CHART_HEIGHT,
+  CHART_MODE,
+  CHART_TYPE,
+  CURRENCY,
+  DAILY_INTERVAL,
+  FREE_PAN_MIN_PADDING,
+  FREE_PAN_PADDING,
+  LINE_WIDTH,
+  PANEL_GAP,
+  PRICE_LEGEND_Y,
+  PRICE_MARGIN_LEFT,
+  PRICE_MARGIN_RIGHT,
+  VOLUME_DOMAIN_TOP,
+  VOLUME_HEIGHT,
+  VOLUME_OPACITY,
+  WICK_WIDTH,
+  theme,
+} from './settings'
 
-const WICK_WIDTH = 1
-const AVERAGE_LINE_WIDTH = 1.75
-const VOLUME_OPACITY = 0.45
 const PRICE_HOVER = `${CURRENCY} %{y:.2f}<extra>%{fullData.name}</extra>`
 const CANDLE_HOVER = [
   'Open %{customdata[0]:.2f}',
@@ -38,19 +48,6 @@ const CANDLE_HOVER = [
   'Close %{customdata[3]:.2f}',
   '<extra>%{fullData.name}</extra>',
 ].join('<br>')
-
-// Price axis: headroom above the high / below the low in fitted and full-range modes, and the padding
-// free-pan adds around the selected period (a share of its range, but at least a share of its high).
-const AXIS_HEADROOM = 0.1
-const FREE_PAN_PADDING = 0.1
-const FREE_PAN_MIN_PADDING = 0.02
-
-// Volume panel sits under the price panel, with a gap between them (shares of the plot height).
-const VOLUME_DOMAIN_TOP = 0.18
-const PANEL_GAP = 0.08
-const LEGEND_Y = 1.06
-const MARGIN_LEFT = 56
-const MARGIN_RIGHT = 16
 
 const xOf = candleCenter
 
@@ -238,13 +235,13 @@ function PriceChart({
       layout={{
         ...baseLayout,
         height: volume ? CHART_HEIGHT + VOLUME_HEIGHT : CHART_HEIGHT,
-        margin: margin(MARGIN_LEFT, MARGIN_RIGHT),
+        margin: margin(PRICE_MARGIN_LEFT, PRICE_MARGIN_RIGHT),
         // Bar widths are set per period (periodMs), so Plotly's own bar gap must not shrink them.
         barmode: 'overlay',
         bargap: 0,
         uirevision: revision.x,
         showlegend: data.filter((trace) => trace.showlegend !== false).length > 1,
-        legend: legend(LEGEND_Y),
+        legend: legend(PRICE_LEGEND_Y),
         xaxis: {
           ...baseXAxis,
           range,

@@ -73,3 +73,23 @@ def init_db():
                 PRIMARY KEY (portfolio_id, ticker)
             )
         """))
+        # Added with the portfolio rules; existing databases get the columns on the next start.
+        connection.execute(text(
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS shares_outstanding DOUBLE PRECISION"
+        ))
+        for column in (
+            "invest_frequency TEXT NOT NULL DEFAULT 'monthly'",
+            "inflow_amount DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "inflow_frequency TEXT NOT NULL DEFAULT 'monthly'",
+            "start_date DATE",
+            "start_cash DOUBLE PRECISION NOT NULL DEFAULT 0",
+        ):
+            connection.execute(text(f"ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS {column}"))
+        connection.execute(text(
+            "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS start_shares DOUBLE PRECISION"
+        ))
+        # The weighting list grew (ownership), so the original check has to be replaced.
+        connection.execute(text("ALTER TABLE portfolios DROP CONSTRAINT IF EXISTS portfolios_weighting_check"))
+        connection.execute(text(
+            f"ALTER TABLE portfolios ADD CONSTRAINT portfolios_weighting_check CHECK (weighting IN ({WEIGHTING_VALUES}))"
+        ))
