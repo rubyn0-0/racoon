@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Stock explorer: yfinance -> PostgreSQL -> FastAPI -> React"
 requires-python = ">=3.10"
 dependencies = [
+    "alembic>=1.13",
     "fastapi>=0.143.0",
+    "numpy>=2.0",
     "pandas>=2.3.3",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.15.0",

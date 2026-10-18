@@ -1,7 +1,7 @@
 // The compare screen: run several saved portfolios on the same days with the same money and see which does best.
 // Each portfolio keeps its own stocks, weighting and investing frequency; the starting amount and the new money
 // are shared. Colors, limits and defaults are in settings.js.
-import Plot from 'react-plotly.js'
+import Plot from './Plot'
 import { useState } from 'react'
 import { fetchCompare } from './api'
 import {

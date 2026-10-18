@@ -8,11 +8,13 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import text
 
 from racoon.analysis import INTERVALS, add_moving_averages, aggregate, parse_windows, to_records
+from racoon.constants import ENV_FILE, LATEST_FUNDAMENTALS
 from racoon.db import get_conn, init_db
-from racoon.loader import debug_snapshot, ensure, seed_companies
+from racoon.loader import debug_snapshot, ensure, reconcile_summaries, seed_companies
 from racoon.portfolios import router as portfolios_router
 
 PRICE_ROWS = ("date", "open", "high", "low", "close", "adjusted_close", "volume", "dividends", "stock_splits")
@@ -20,9 +22,18 @@ MAX_ENSURE = 60  # more than the ticker list holds
 GZIP_MINIMUM_BYTES = 1000
 
 
+class DevSettings(BaseSettings):
+    """Switches for development-only tools; everything is off unless DEV_TOOLS=1 is in .env."""
+
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
+
+    dev_tools: bool = False
+
+
 @asynccontextmanager
 async def lifespan(app):
-    init_db()  # creates new tables and columns on an existing database
+    init_db()  # upgrades the database to the newest migration (a no-op when it is already there)
+    reconcile_summaries()  # fix cached price summaries that disagree with the stored rows (once, not per poll)
     seed_companies()  # every company in the ticker list exists from the start; prices load on demand
     yield
 
@@ -67,15 +78,23 @@ def health(conn=Depends(get_conn)):
 
 @app.get("/api/stocks")
 def list_stocks(conn=Depends(get_conn)):
-    """Every company, SMI members first, with a summary of the history stored for it (none until loaded)."""
-    rows = conn.execute(text("""
-        SELECT ticker, name AS company, in_smi, market_cap, shares_outstanding,
-               to_char(price_start, 'YYYY-MM-DD') AS start_date,
-               to_char(price_end, 'YYYY-MM-DD') AS end_date,
-               price_count AS count,
-               (price_count > 0 AND full_history) AS loaded
-        FROM companies
-        ORDER BY in_smi DESC, name
+    """Every company, SMI members first, with the markets it is in now and a summary of the history stored for it (none until loaded)."""
+    rows = conn.execute(text(f"""
+        SELECT c.ticker, c.name AS company, f.market_cap, f.shares_outstanding,
+               to_char(s.price_start, 'YYYY-MM-DD') AS start_date,
+               to_char(s.price_end, 'YYYY-MM-DD') AS end_date,
+               s.price_count AS count,
+               (s.price_count > 0 AND s.full_history) AS loaded,
+               COALESCE(m.markets, ARRAY[]::text[]) AS markets,
+               COALESCE('SMI' = ANY(m.markets), FALSE) AS in_smi
+        FROM companies c
+        JOIN company_load_state s ON s.ticker = c.ticker
+        {LATEST_FUNDAMENTALS}
+        LEFT JOIN (
+            SELECT ticker, array_agg(market ORDER BY market) AS markets
+            FROM index_membership WHERE valid_to IS NULL GROUP BY ticker
+        ) m ON m.ticker = c.ticker
+        ORDER BY in_smi DESC, c.name
     """)).mappings()
     return [dict(row) for row in rows]
 
@@ -86,11 +105,12 @@ def ensure_stocks(body: EnsureIn):
     return ensure(list(dict.fromkeys(body.tickers)))
 
 
-# TEMPORARY, for checking the on-demand loader (remove together with TestLoader.jsx).
-@app.get("/api/debug/loading")
-def debug_loading():
-    """Per company: the rows really in the prices table, the stored summary next to it, and the last load job."""
-    return debug_snapshot()
+if DevSettings().dev_tools:  # for checking the on-demand loader, together with TestLoader.jsx
+
+    @app.get("/api/debug/loading")
+    def debug_loading():
+        """Per company: the rows really in the prices table, the stored summary next to it, and the last load job."""
+        return debug_snapshot()
 
 
 @app.get("/api/prices/on")

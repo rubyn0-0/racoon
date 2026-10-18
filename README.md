@@ -8,15 +8,24 @@ README.md
 docs/                      project notes (Plan.md)
 src/
   backend/                 Python project (uv)
-    pyproject.toml, uv.lock, .env.example
-    data/                  the stock list (six_stocks_tickers.csv; in_smi marks the current SMI members)
+    pyproject.toml, uv.lock, .env.example, alembic.ini
+    migrations/            database schema history (Alembic): versions/0001_baseline.py ... 0004_...
+    data/                  the stock list (six_stocks_tickers.csv; its market column lists the markets, e.g. SMI, separated by ;)
     src/racoon/
-      db.py                the single database handle (DATABASE_URL from src/backend/.env)
+      db.py                the single database handle (DATABASE_URL from src/backend/.env) and init_db()
+      constants.py         shared names and paths (weightings, .env, data folder)
       loader.py            loads price history from Yahoo on demand, in background jobs
+      analysis.py          candles, intervals and moving averages for the explorer
+      backtest.py          the portfolio simulation: weights, investing days, buying whole shares
+      portfolios.py        portfolio routes, saving, comparing and backtesting
       api.py               FastAPI app
+    tests/                 pytest (pure functions; the database tests need RACOON_TEST_DATABASE_URL)
   frontend/                Vite + React + Plotly
     src/
-      main.jsx             starts the app: loads the stocks, shows the two tabs
+      main.jsx             starts the app (theme, then App.jsx)
+      App.jsx              loads the stocks, shows the tabs, loads each screen on demand
+      Plot.jsx             the slim Plotly build (scatter and bar only) used by every chart
+      TestLoader.jsx       dev-only red button that loads every stock and shows what is stored
       settings.js          every colour, size, label and default you might want to change
       helpers.jsx          number and date formatting, chart layout pieces, the button row
       api.js               calls to the backend
@@ -45,7 +54,7 @@ cd src/frontend; npm run dev                               # http://localhost:51
 Health check: http://localhost:8000/api/health
 
 ## API
-- `GET /api/stocks`: companies with first/last date and row count
+- `GET /api/stocks`: companies with first/last date, row count, `markets` (current memberships) and `in_smi`
 - `GET /api/stocks/{ticker}/prices`: OHLC, volume, dividends, splits. Options:
   - `interval=day|week|month|year` (candles are aggregated on the server)
   - `ma=20,50,200` simple moving averages of close, returned as `ma20`, `ma50`, ...
@@ -66,6 +75,18 @@ Health check: http://localhost:8000/api/health
 - `GET /api/prices/on?tickers=&on=`: the close on a day, for valuing a starting position.
 
 Market caps and share counts are loaded together with a stock's prices.
+
+## Dev tools
+The red "load every stock" button shows only while running `npm run dev` (hide it with `VITE_DEV_TOOLS=0` in `src/frontend/.env`), and it needs `DEV_TOOLS=1` in `src/backend/.env`, which turns on `/api/debug/loading`. A load that stays in `loading` for more than 3 minutes (or queued for 15) is flagged as stuck in the backend log and in that table.
+
+## Database changes
+Tables: `companies` (identity and exchange timezone), `company_load_state` (what the loader stored), `index_membership` (market, valid_from/valid_to; open while valid_to is NULL) and `company_fundamentals` (market cap and shares per as_of date; backtests use the row valid on each day).
+
+The backend upgrades the database to the newest schema when it starts (`init_db()`), so a change to a table is a new migration:
+1. `cd src/backend; uv run alembic revision -m "what changes"` creates `migrations/versions/<id>_what_changes.py`.
+2. Write the SQL in `upgrade()` with `op.execute("...")`, and the undo in `downgrade()`.
+3. `uv run alembic upgrade head` applies it now; the app also does this on start.
+4. Never edit a migration that has been applied. Add a new one instead.
 
 ## Tests
 `cd src/backend; uv run pytest`

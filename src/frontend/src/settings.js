@@ -63,8 +63,28 @@ export const CSS_VARIABLES = {
   'button-hover': 'buttonHover',
 }
 
+// The backend refuses more tickers than this per ensure call, so api.js sends them in batches of this size.
+export const ENSURE_BATCH_SIZE = 50
+
 // Charts shared by the price and backtest charts.
 export const CHART_FONT_SIZE = 12
+
+// Type scale, published to the stylesheet as CSS variables (see applyThemeVariables in helpers.jsx).
+// --text-xs is derived from CHART_FONT_SIZE, so captions and chart labels cannot drift apart.
+export const TYPE_TOKENS = {
+  'text-xs': `${CHART_FONT_SIZE / 16}rem`,  // reserved for captions; matches the chart font size
+  'text-sm': '0.8125rem',
+  'text-md': '1rem',
+  'text-lg': '1.25rem',
+  'text-xl': '1.75rem',
+  'text-display': '3rem',
+  'weight-regular': '400',
+  'weight-medium': '500',
+  'weight-semibold': '600',
+  'leading-body': '1.45',
+  'leading-tight': '1.1',
+  'tracking-heading': '-0.015em',
+}
 export const LINE_WIDTH = 2
 export const MARGIN_TOP = 8
 export const MARGIN_BOTTOM = 40
@@ -202,7 +222,7 @@ export const MAX_DRAWN_CANDLES = 1500
 // Extra room kept on each side of the visible range, as a share of it, so panning never shows a gap.
 export const WINDOW_PADDING = 0.25
 export const ZOOMED_OUT_NOTE = 'Zoomed out: showing closing prices. Zoom in to see the candles.'
-export const SEARCH_RESULTS = 8
+export const SEARCH_VISIBLE_ROWS = 7
 
 // Messages.
 // Shown in place of the end date in the price header when the chart reaches the latest data.

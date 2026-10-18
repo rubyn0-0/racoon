@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
@@ -11,27 +12,30 @@ from sqlalchemy.exc import IntegrityError
 from racoon.backtest import (
     INFLOW_FREQUENCIES,
     INVEST_FREQUENCIES,
-    MANUAL,
-    MARKET_CAP,
     MONTHLY,
-    OWNERSHIP,
-    WEIGHTINGS,
     backtest,
     common_window,
     fixed_rule,
     limiting_stock,
+    market_cap_rule,
     ownership_rule,
     plan,
     target_weights,
 )
+from racoon.constants import LATEST_FUNDAMENTALS, MANUAL, MARKET_CAP, OWNERSHIP, WEIGHTINGS
 from racoon.db import get_conn
 
 router = APIRouter(prefix="/api/portfolios", tags=["portfolios"])
 
-MAX_HOLDINGS = 30
 NAME_MAX_LENGTH = 80  # the frontend mirrors this as PORTFOLIO_NAME_MAX_LENGTH
 DUPLICATE_NAME_ERROR = "A portfolio with this name already exists."
+SIZES_LOADING_ERROR = "Company sizes for this portfolio are still loading. Try again in a moment."
+SIZE_COLUMNS = {MARKET_CAP: "market_cap", OWNERSHIP: "shares_outstanding"}  # the column each size weighting reads
 CURRENCY = "CHF"
+PORTFOLIO_COLUMNS = """
+    id, name, weighting, invest_frequency, inflow_amount, inflow_frequency,
+    to_char(start_date, 'YYYY-MM-DD') AS start_date, initial_capital
+"""
 MIN_COMPARE, MAX_COMPARE = 2, 6  # the frontend mirrors these
 PRICE_MARGIN_DAYS = 7  # prices fetched before a requested start, so holidays can carry the last close forward
 MAX_PLAN_DAYS = 1830  # the plan looks at most five years ahead
@@ -47,7 +51,7 @@ class HoldingIn(BaseModel):
 
 class WeightsIn(BaseModel):
     weighting: Literal[WEIGHTINGS]
-    holdings: list[HoldingIn] = Field(min_length=1, max_length=MAX_HOLDINGS)
+    holdings: list[HoldingIn] = Field(min_length=1)
 
 
 class PortfolioIn(WeightsIn):
@@ -59,11 +63,25 @@ class PortfolioIn(WeightsIn):
     initial_capital: float = Field(default=0, ge=0, description=f"{CURRENCY} invested on the first day")
 
 
-def resolve_holdings(conn, weighting, holdings, strict=True):
+def fetch_companies(conn, tickers):
+    """ticker -> name and the current (newest) market cap and shares outstanding."""
+    rows = conn.execute(
+        text(f"""
+            SELECT c.ticker, c.name, f.market_cap, f.shares_outstanding
+            FROM companies c {LATEST_FUNDAMENTALS} WHERE c.ticker = ANY(:tickers)
+        """),
+        {"tickers": tickers},
+    ).mappings().all()
+    return {row["ticker"]: row for row in rows}
+
+
+def resolve_holdings(conn, weighting, holdings, strict=True, companies=None, closes=None):
     """Check the holdings against the companies table and attach each target weight.
 
     With strict=False a company whose size is not loaded yet leaves the weights empty (None) instead of
     failing, so saved portfolios can still be listed before their stocks have been opened.
+    Pass companies (ticker -> row) and closes (ticker -> latest close) when they were already fetched for
+    many portfolios at once.
     """
     tickers = [holding["ticker"] for holding in holdings]
     selected = [holding for holding in holdings if holding.get("selected", True)]
@@ -75,11 +93,8 @@ def resolve_holdings(conn, weighting, holdings, strict=True):
     if weighting == MANUAL and any(holding["weight"] is None for holding in selected):
         raise HTTPException(status_code=422, detail="Give every stock a weight, or pick another weighting.")
 
-    rows = conn.execute(
-        text("SELECT ticker, name, market_cap, shares_outstanding FROM companies WHERE ticker = ANY(:tickers)"),
-        {"tickers": tickers},
-    ).mappings().all()
-    companies = {row["ticker"]: row for row in rows}
+    if companies is None:
+        companies = fetch_companies(conn, tickers)
 
     unknown = [ticker for ticker in tickers if ticker not in companies]
     if unknown:
@@ -97,7 +112,7 @@ def resolve_holdings(conn, weighting, holdings, strict=True):
         if missing:
             sizes = None
     elif weighting == OWNERSHIP:
-        sizes = ownership_sizes(conn, selected_tickers, companies, strict)
+        sizes = ownership_sizes(conn, selected_tickers, companies, strict, closes)
 
     if sizes is None and weighting in (MARKET_CAP, OWNERSHIP):
         weights = dict.fromkeys(selected_tickers)
@@ -116,8 +131,8 @@ def resolve_holdings(conn, weighting, holdings, strict=True):
     ]
 
 
-def ownership_sizes(conn, tickers, companies, strict=True):
-    """Value of all shares of each company today (shares outstanding x latest close); None if not loaded."""
+def fetch_latest_closes(conn, tickers):
+    """ticker -> the most recent close, for the tickers that have one."""
     latest = conn.execute(
         text("""
             SELECT DISTINCT ON (ticker) ticker, close
@@ -127,7 +142,16 @@ def ownership_sizes(conn, tickers, companies, strict=True):
         """),
         {"tickers": tickers},
     ).mappings().all()
-    closes = {row["ticker"]: row["close"] for row in latest}
+    return {row["ticker"]: row["close"] for row in latest}
+
+
+def ownership_sizes(conn, tickers, companies, strict=True, closes=None):
+    """Value of all shares of each company today (shares outstanding x latest close); None if not loaded.
+
+    Pass closes (ticker -> latest close) when they were already fetched; otherwise they are queried here.
+    """
+    if closes is None:
+        closes = fetch_latest_closes(conn, tickers)
 
     missing = [
         companies[ticker]["name"]
@@ -144,13 +168,16 @@ def ownership_sizes(conn, tickers, companies, strict=True):
     return {ticker: companies[ticker]["shares_outstanding"] * closes[ticker] for ticker in tickers}
 
 
+def require_portfolio(conn, portfolio_id):
+    """404 unless the portfolio exists; cheaper than loading it with its holdings."""
+    exists = conn.execute(text("SELECT 1 FROM portfolios WHERE id = :id"), {"id": portfolio_id}).first()
+    if exists is None:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+
 def load_portfolio(conn, portfolio_id):
     portfolio = conn.execute(
-        text("""
-            SELECT id, name, weighting, invest_frequency, inflow_amount, inflow_frequency,
-                   to_char(start_date, 'YYYY-MM-DD') AS start_date, initial_capital
-            FROM portfolios WHERE id = :id
-        """),
+        text(f"SELECT {PORTFOLIO_COLUMNS} FROM portfolios WHERE id = :id"),
         {"id": portfolio_id},
     ).mappings().first()
     if portfolio is None:
@@ -165,6 +192,46 @@ def load_portfolio(conn, portfolio_id):
         **portfolio,
         "holdings": resolve_holdings(conn, portfolio["weighting"], [dict(row) for row in holdings], strict=False),
     }
+
+
+def load_portfolios(conn, portfolio_ids):
+    """Several portfolios with their holdings in four queries in total (five when one of them is weighted
+    by ownership, which needs the latest closes once for all of them), in the order of portfolio_ids."""
+    rows = conn.execute(
+        text(f"SELECT {PORTFOLIO_COLUMNS} FROM portfolios WHERE id = ANY(:ids)"),
+        {"ids": portfolio_ids},
+    ).mappings().all()
+    portfolios = {row["id"]: row for row in rows}
+    if any(portfolio_id not in portfolios for portfolio_id in portfolio_ids):
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    holding_rows = conn.execute(
+        text("""
+            SELECT portfolio_id, ticker, weight, start_shares, selected
+            FROM holdings WHERE portfolio_id = ANY(:ids) ORDER BY ticker
+        """),
+        {"ids": portfolio_ids},
+    ).mappings().all()
+    holdings = {portfolio_id: [] for portfolio_id in portfolio_ids}
+    for row in holding_rows:
+        holdings[row["portfolio_id"]].append({key: row[key] for key in ("ticker", "weight", "start_shares", "selected")})
+
+    companies = fetch_companies(conn, sorted({row["ticker"] for row in holding_rows}))
+    ownership_tickers = sorted({
+        holding["ticker"]
+        for portfolio_id in portfolio_ids if portfolios[portfolio_id]["weighting"] == OWNERSHIP
+        for holding in holdings[portfolio_id]
+    })
+    closes = fetch_latest_closes(conn, ownership_tickers) if ownership_tickers else None
+
+    loaded = []
+    for portfolio_id in portfolio_ids:
+        portfolio = portfolios[portfolio_id]
+        resolved = resolve_holdings(
+            conn, portfolio["weighting"], holdings[portfolio_id], strict=False, companies=companies, closes=closes
+        )
+        loaded.append({**portfolio, "holdings": resolved})
+    return loaded
 
 
 def selected_holdings(portfolio):
@@ -215,18 +282,25 @@ def save_holdings(conn, portfolio_id, body):
     )
 
 
-def commit_or_conflict(conn):
+@contextmanager
+def conflict_on_duplicate_name(conn):
+    """Turn the database refusing a duplicate portfolio name into a 409, after undoing the half-done change."""
     try:
-        conn.commit()
+        yield
     except IntegrityError:
         conn.rollback()
         raise HTTPException(status_code=409, detail=DUPLICATE_NAME_ERROR)
 
 
+def commit_or_conflict(conn):
+    with conflict_on_duplicate_name(conn):
+        conn.commit()
+
+
 @router.get("")
 def list_portfolios(conn=Depends(get_conn)):
     ids = conn.execute(text("SELECT id FROM portfolios ORDER BY name")).scalars().all()
-    return [load_portfolio(conn, portfolio_id) for portfolio_id in ids]
+    return load_portfolios(conn, ids)
 
 
 @router.post("/weights")
@@ -238,7 +312,7 @@ def preview_weights(body: WeightsIn, conn=Depends(get_conn)):
 @router.post("", status_code=201)
 def create_portfolio(body: PortfolioIn, conn=Depends(get_conn)):
     resolve_holdings(conn, body.weighting, [holding.model_dump() for holding in body.holdings])
-    try:
+    with conflict_on_duplicate_name(conn):
         portfolio_id = conn.execute(
             text("""
                 INSERT INTO portfolios (
@@ -251,9 +325,6 @@ def create_portfolio(body: PortfolioIn, conn=Depends(get_conn)):
             """),
             rule_params(body),
         ).scalar_one()
-    except IntegrityError:
-        conn.rollback()
-        raise HTTPException(status_code=409, detail=DUPLICATE_NAME_ERROR)
 
     save_holdings(conn, portfolio_id, body)
     commit_or_conflict(conn)
@@ -281,13 +352,16 @@ def compare_portfolios(
         raise HTTPException(status_code=422, detail="Invest a starting amount, new money, or both.")
 
     # The prices of every stock involved come from one query, then each portfolio takes its columns.
-    portfolios = [load_portfolio(conn, portfolio_id) for portfolio_id in portfolio_ids]
+    portfolios = load_portfolios(conn, portfolio_ids)
     tickers = sorted({holding["ticker"] for portfolio in portfolios for holding in selected_holdings(portfolio)})
     raw_closes, raw_dividends = fetch_prices(conn, tickers, start)
+    size_histories = None
+    if any(portfolio["weighting"] in (MARKET_CAP, OWNERSHIP) for portfolio in portfolios):
+        size_histories = {column: fetch_size_history(conn, tickers, column) for column in SIZE_COLUMNS.values()}
 
     shared = {"initial": initial, "inflow": inflow, "inflow_frequency": inflow_frequency}
     simulations = [
-        build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, shared)
+        build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, shared, size_histories)
         for portfolio in portfolios
     ]
     first, last = common_window([simulation.closes for simulation in simulations])
@@ -344,9 +418,9 @@ def get_portfolio(portfolio_id: int, conn=Depends(get_conn)):
 
 @router.put("/{portfolio_id}")
 def update_portfolio(portfolio_id: int, body: PortfolioIn, conn=Depends(get_conn)):
-    load_portfolio(conn, portfolio_id)
+    require_portfolio(conn, portfolio_id)
     resolve_holdings(conn, body.weighting, [holding.model_dump() for holding in body.holdings])
-    try:
+    with conflict_on_duplicate_name(conn):
         conn.execute(
             text("""
                 UPDATE portfolios SET
@@ -357,9 +431,6 @@ def update_portfolio(portfolio_id: int, body: PortfolioIn, conn=Depends(get_conn
             """),
             {"id": portfolio_id, **rule_params(body)},
         )
-    except IntegrityError:
-        conn.rollback()
-        raise HTTPException(status_code=409, detail=DUPLICATE_NAME_ERROR)
 
     save_holdings(conn, portfolio_id, body)
     commit_or_conflict(conn)
@@ -368,7 +439,7 @@ def update_portfolio(portfolio_id: int, body: PortfolioIn, conn=Depends(get_conn
 
 @router.delete("/{portfolio_id}", status_code=204)
 def delete_portfolio(portfolio_id: int, conn=Depends(get_conn)):
-    load_portfolio(conn, portfolio_id)
+    require_portfolio(conn, portfolio_id)
     conn.execute(text("DELETE FROM portfolios WHERE id = :id"), {"id": portfolio_id})
     conn.commit()
     return Response(status_code=204)
@@ -386,11 +457,29 @@ class Simulation:
     limited_by: dict | None  # the stock whose late listing shortens the test, if any
 
 
+def raise_missing_prices(conn, missing):
+    """409 while any of these tickers has no prices stored yet, else 422 naming the range that is stored."""
+    stored = conn.execute(
+        text("SELECT ticker, price_count, price_start, price_end FROM company_load_state WHERE ticker = ANY(:tickers)"),
+        {"tickers": missing},
+    ).all()
+    loaded = {ticker: (first, last) for ticker, count, first, last in stored if count > 0}
+    loading = [ticker for ticker in missing if ticker not in loaded]
+    if loading:
+        raise HTTPException(status_code=409, detail=f"Prices for {', '.join(loading)} are still loading")
+
+    detail = " ".join(
+        f"No prices for {ticker} in this date range. Stored: {first:%Y-%m-%d} to {last:%Y-%m-%d}."
+        for ticker, (first, last) in loaded.items()
+    )
+    raise HTTPException(status_code=422, detail=detail)
+
+
 def fetch_prices(conn, tickers, start=None):
     """Closes and dividends of these tickers as two tables (one column per ticker) on the same days.
 
     One date-bounded query returning plain tuples. A ticker with no stored prices is still being loaded,
-    which is a 409 rather than a silently shorter test.
+    which is a 409 rather than a silently shorter test. A loaded ticker with nothing in the window is a 422.
     """
     sql = "SELECT date::text, ticker, close, dividends FROM prices WHERE ticker = ANY(:tickers) AND close IS NOT NULL"
     params = {"tickers": list(tickers)}
@@ -403,18 +492,34 @@ def fetch_prices(conn, tickers, start=None):
 
     missing = sorted(set(tickers) - set(frame["ticker"]))
     if missing:
-        raise HTTPException(status_code=409, detail=f"Prices for {', '.join(missing)} are still loading")
+        raise_missing_prices(conn, missing)
 
     closes = frame.pivot(index="date", columns="ticker", values="close").sort_index()
     dividends = frame.pivot(index="date", columns="ticker", values="dividends").sort_index()
     return closes, dividends
 
 
-def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, shared=None):
+def fetch_size_history(conn, tickers, column):
+    """ticker -> [(as_of, value)] oldest first, for "market_cap" or "shares_outstanding"; rows without it are skipped."""
+    rows = conn.execute(
+        text(f"""
+            SELECT ticker, as_of::text, {column} FROM company_fundamentals
+            WHERE ticker = ANY(:tickers) AND {column} IS NOT NULL ORDER BY ticker, as_of
+        """),
+        {"tickers": list(tickers)},
+    ).all()
+    history = {ticker: [] for ticker in tickers}
+    for ticker, as_of, value in rows:
+        history[ticker].append((as_of, value))
+    return history
+
+
+def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, shared=None, size_histories=None):
     """Cut the price tables down to one portfolio and attach its weight rule and rules.
 
     `shared` ({initial, inflow, inflow_frequency}) replaces the portfolio's own starting capital and new
     money and drops its starting position, so several portfolios can be run with the same money.
+    `size_histories` ({column: fetch_size_history result}) saves fetching the sizes again for each portfolio.
     """
     strategy_holdings = selected_holdings(portfolio)
     holdings = strategy_holdings if shared else backtest_holdings(portfolio)
@@ -425,14 +530,11 @@ def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, sha
         for holding in holdings
     }
     if any(weight is None for weight in weights.values()):
-        raise HTTPException(
-            status_code=409,
-            detail="Company sizes for this portfolio are still loading. Try again in a moment.",
-        )
+        raise HTTPException(status_code=409, detail=SIZES_LOADING_ERROR)
     companies = {holding["ticker"]: holding["company"] for holding in holdings}
     stored_starts = dict(
         conn.execute(
-            text("SELECT ticker, price_start FROM companies WHERE ticker = ANY(:tickers)"),
+            text("SELECT ticker, price_start FROM company_load_state WHERE ticker = ANY(:tickers)"),
             {"tickers": tickers},
         ).all()
     )
@@ -465,16 +567,16 @@ def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, sha
         ticker, listed = limiting
         limited_by = {"ticker": ticker, "company": companies[ticker], "date": listed}
 
-    if portfolio["weighting"] == OWNERSHIP:
-        shares_outstanding = dict(
-            conn.execute(
-                text("SELECT ticker, shares_outstanding FROM companies WHERE ticker = ANY(:tickers)"),
-                {"tickers": tickers},
-            ).all()
-        )
-        strategy_rule = ownership_rule(strategy_holdings, shares_outstanding)
+    if portfolio["weighting"] in (MARKET_CAP, OWNERSHIP):
+        # Sizes are looked up for the day each rule is applied, not only as they are today.
+        column = SIZE_COLUMNS[portfolio["weighting"]]
+        history = size_histories[column] if size_histories else fetch_size_history(conn, strategy_tickers, column)
+        if any(not history.get(ticker) for ticker in strategy_tickers):
+            raise HTTPException(status_code=409, detail=SIZES_LOADING_ERROR)
+        size_rule = market_cap_rule if portfolio["weighting"] == MARKET_CAP else ownership_rule
+        strategy_rule = size_rule(strategy_holdings, history)
         position_only = set(tickers) - strategy_tickers
-        rule = lambda prices: {**strategy_rule(prices), **dict.fromkeys(position_only, 0.0)}
+        rule = lambda prices, day: {**strategy_rule(prices, day), **dict.fromkeys(position_only, 0.0)}
     else:
         rule = fixed_rule(weights)
 
@@ -536,9 +638,7 @@ def run_backtest(
         "settings": {
             "initial_capital": rules["initial"],
             "start_date": portfolio["start_date"],
-            "has_starting_position": any(
-                (holding["start_shares"] or 0) > 0 for holding in holdings
-            ),
+            "has_starting_position": has_starting_shares,
             "invest_frequency": portfolio["invest_frequency"],
             "inflow_amount": portfolio["inflow_amount"],
             "inflow_frequency": portfolio["inflow_frequency"],

@@ -1,5 +1,5 @@
 // Talks to the backend. The address is DEFAULT_API_URL in settings.js unless VITE_API_URL is set.
-import { AVERAGE_WINDOWS, DEFAULT_API_URL } from './settings'
+import { AVERAGE_WINDOWS, DEFAULT_API_URL, ENSURE_BATCH_SIZE } from './settings'
 
 const API_URL = import.meta.env.VITE_API_URL ?? DEFAULT_API_URL
 
@@ -40,8 +40,23 @@ export function fetchStocks() {
 }
 
 // Start loading prices that are missing or old, and report progress per stock. Call again to poll.
-export function ensureStocks(tickers) {
-  return request(routes.ensure, { method: 'POST', body: { tickers } })
+// Long lists are split into batches and the answers merged, so callers get one {states, done, total}.
+export async function ensureStocks(tickers) {
+  function ensureBatch(batch) {
+    return request(routes.ensure, { method: 'POST', body: { tickers: batch } })
+  }
+
+  if (tickers.length <= ENSURE_BATCH_SIZE) return ensureBatch(tickers)
+  const batches = []
+  for (let start = 0; start < tickers.length; start += ENSURE_BATCH_SIZE) {
+    batches.push(tickers.slice(start, start + ENSURE_BATCH_SIZE))
+  }
+  const results = await Promise.all(batches.map(ensureBatch))
+  return {
+    states: Object.assign({}, ...results.map((result) => result.states)),
+    done: results.reduce((sum, result) => sum + result.done, 0),
+    total: results.reduce((sum, result) => sum + result.total, 0),
+  }
 }
 
 // TEMPORARY, for TestLoader.jsx: what is really stored per stock, and the last load job.

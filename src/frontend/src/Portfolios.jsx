@@ -1,9 +1,8 @@
 // The portfolios screen: a saved-portfolio list on the left, the editor and the backtest on the right.
 // Weighting names, help texts, frequencies and defaults are in settings.js.
-import { useEffect, useState } from 'react'
+import { lazy, useEffect, useState } from 'react'
+import { ScreenBoundary } from './ErrorBoundary'
 import { deletePortfolio, fetchClosesOn, fetchPortfolios, previewWeights, savePortfolio } from './api'
-import BacktestPanel from './Backtest'
-import Compare from './Compare'
 import {
   LoadingNote,
   OptionButtons,
@@ -41,6 +40,10 @@ import {
   WEIGHT_STEP,
   WEIGHT_TOTAL,
 } from './settings'
+
+// The charting screens load on demand, so they stay out of the first download.
+const BacktestPanel = lazy(() => import('./Backtest'))
+const Compare = lazy(() => import('./Compare'))
 
 // The screen: list of saved portfolios plus whichever one is selected.
 function Portfolios({ stocks, onStocksChanged }) {
@@ -127,7 +130,11 @@ function Portfolios({ stocks, onStocksChanged }) {
       </aside>
 
       <div className="portfolio-main">
-        {selectedId === COMPARE_PORTFOLIOS && <Compare portfolios={portfolios} stocks={stocks} onStocksChanged={onStocksChanged} />}
+        {selectedId === COMPARE_PORTFOLIOS && (
+          <ScreenBoundary>
+            <Compare portfolios={portfolios} stocks={stocks} onStocksChanged={onStocksChanged} />
+          </ScreenBoundary>
+        )}
         {selectedId !== COMPARE_PORTFOLIOS && (
           <PortfolioEditor
             // A fresh editor per portfolio or copy, so switching never mixes two drafts.
@@ -142,13 +149,15 @@ function Portfolios({ stocks, onStocksChanged }) {
           />
         )}
         {selected && (
-          <BacktestPanel
-            // Re-run from scratch whenever anything saved about the portfolio changes.
-            key={`${selected.id}-${JSON.stringify(selected)}`}
-            stocks={stocks}
-            onStocksChanged={onStocksChanged}
-            portfolio={selected}
-          />
+          <ScreenBoundary>
+            <BacktestPanel
+              // Re-run from scratch whenever anything saved about the portfolio changes.
+              key={`${selected.id}-${JSON.stringify(selected)}`}
+              stocks={stocks}
+              onStocksChanged={onStocksChanged}
+              portfolio={selected}
+            />
+          </ScreenBoundary>
         )}
       </div>
     </div>
@@ -189,6 +198,7 @@ function initialWeights(portfolio) {
 const round2 = (value) => Math.round(value * 100) / 100
 
 // Everything the API stores about a portfolio, in a fixed shape so a draft can be compared with the saved one.
+// Holdings are sorted by ticker so the order stocks were added in never counts as a change.
 function makeDraft({
   name,
   weighting,
@@ -202,12 +212,14 @@ function makeDraft({
   return {
     name,
     weighting,
-    holdings: rows.map((row) => ({
-      ticker: row.ticker,
-      selected: row.selected,
-      weight: weighting === WEIGHTING.MANUAL && row.selected ? row.weight : null,
-      start_shares: row.inStartingPosition ? row.startShares : null,
-    })),
+    holdings: rows
+      .map((row) => ({
+        ticker: row.ticker,
+        selected: row.selected,
+        weight: weighting === WEIGHTING.MANUAL && row.selected ? row.weight : null,
+        start_shares: row.inStartingPosition ? row.startShares : null,
+      }))
+      .sort((a, b) => a.ticker.localeCompare(b.ticker)),
     initial_capital: round2(initialCapital),
     invest_frequency: investFrequency,
     inflow_amount: inflowAmount,
@@ -625,11 +637,8 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
             value=""
             clearOnSelect
             excludedTickers={availableTickers}
-            maxResults={null}
-            visibleRows={7}
             onSelect={addStock}
           />
-          <span className="option-label">Stocks</span>
           {availableTickers.length > 0 && (
             <button type="button" className="quiet select-all" onClick={toggleAllStocks}>
               {tickers.length === availableTickers.length ? 'Deselect all' : 'Select all'}
@@ -639,7 +648,7 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
             <p className="muted">Search for a stock above to add it here.</p>
           ) : (
             <div className="table-scroll">
-              <table className="holdings-table">
+              <table className="holdings-table" aria-label="Stocks">
                 <thead>
                   <tr>
                     <th scope="col">Stock</th>
@@ -739,8 +748,6 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
             value=""
             clearOnSelect
             excludedTickers={positionTickers}
-            maxResults={null}
-            visibleRows={7}
             onSelect={addPosition}
           />
           {positionTickers.length > 0 && (

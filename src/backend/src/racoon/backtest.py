@@ -3,8 +3,8 @@
 import numpy as np
 import pandas as pd
 
-MANUAL, EQUAL, MARKET_CAP, OWNERSHIP = "manual", "equal", "market_cap", "ownership"
-WEIGHTINGS = (MANUAL, EQUAL, MARKET_CAP, OWNERSHIP)
+from racoon.constants import EQUAL, MANUAL, MARKET_CAP, OWNERSHIP
+
 SMI_CAP = 0.20  # the SMI caps every company at 20% of the index
 
 IMMEDIATE, MONTHLY, QUARTERLY, YEARLY, NEVER = "immediate", "monthly", "quarterly", "yearly", "never"
@@ -60,17 +60,61 @@ def target_weights(holdings, weighting, market_caps=None):
     return cap_weights(weights) if weighting == MARKET_CAP else weights
 
 
+def size_on(history, day):
+    """The size valid on `day` from history [(as_of, value)], oldest first, dates as "YYYY-MM-DD".
+
+    That is the newest entry dated on or before the day; a day before the first entry uses the first one.
+    None when the history is empty.
+    """
+    if not history:
+        return None
+    size = history[0][1]
+    for as_of, value in history:
+        if as_of > day:
+            break
+        size = value
+    return size
+
+
+# A weight rule is a function (prices, day) -> target weights, where prices is a {ticker: price} dict
+# and day is "YYYY-MM-DD".
+
 def fixed_rule(weights):
-    """A weight rule that ignores prices: the same target weights every day."""
-    return lambda prices: weights
+    """A weight rule that ignores prices and day: the same target weights every day."""
+    return lambda prices, day: weights
 
 
-def ownership_rule(holdings, shares_outstanding):
-    """Own the same share of every company: the target follows each company's total value day by day."""
-    return lambda prices: target_weights(
+def known_size(history, day, ticker):
+    """The size valid on `day`; a ValueError when there is none (the API checks the histories before running)."""
+    size = size_on(history, day)
+    if size is None:
+        raise ValueError(f"no company size known for {ticker}")
+    return size
+
+
+def market_cap_rule(holdings, market_cap_history):
+    """Weight by market cap (capped like the SMI), using the market cap that was valid on each day."""
+    return lambda prices, day: target_weights(
+        holdings,
+        MARKET_CAP,
+        {
+            holding["ticker"]: known_size(market_cap_history[holding["ticker"]], day, holding["ticker"])
+            for holding in holdings
+        },
+    )
+
+
+def ownership_rule(holdings, shares_history):
+    """Own the same share of every company: the target follows each company's total value day by day,
+    which is the shares outstanding valid on that day times its price."""
+    return lambda prices, day: target_weights(
         holdings,
         OWNERSHIP,
-        {holding["ticker"]: shares_outstanding[holding["ticker"]] * prices[holding["ticker"]] for holding in holdings},
+        {
+            holding["ticker"]: known_size(shares_history[holding["ticker"]], day, holding["ticker"])
+            * prices[holding["ticker"]]
+            for holding in holdings
+        },
     )
 
 
@@ -143,7 +187,7 @@ def backtest(
     """Simulate buy-and-hold with a cash balance, whole shares and scheduled investing.
 
     closes / dividends: DataFrames with the same "YYYY-MM-DD" index and columns, one column per ticker,
-    no gaps. weight_rule(prices) gives the target weights for a day (prices is a {ticker: price} dict).
+    no gaps. weight_rule(prices, day) gives the target weights for a day (prices is a {ticker: price} dict).
 
     Start: `initial` cash, invested on the first day, plus optionally shares already owned
     (`start_shares` {ticker: shares}) that are simply held from the start; the first purchase counts them.
@@ -190,7 +234,7 @@ def backtest(
         if cash > 0 and (index == 0 or invest_days[index]):
             cash_before = cash
             price_map = dict(zip(tickers, prices.tolist()))
-            held, cash, purchases = allocate(cash, price_map, dict(zip(tickers, shares.tolist())), weight_rule(price_map))
+            held, cash, purchases = allocate(cash, price_map, dict(zip(tickers, shares.tolist())), weight_rule(price_map, date))
             shares = np.array([held[ticker] for ticker in tickers])
             bought = [
                 {"ticker": ticker, "shares": count, "price": price_map[ticker]}
@@ -253,7 +297,7 @@ def backtest(
     final_value = series[-1]["value"]
     gain = final_value - invested
     holdings_value = {ticker: float(shares[i] * last_prices[ticker]) for i, ticker in enumerate(tickers)}
-    final_weights = weight_rule(last_prices)
+    final_weights = weight_rule(last_prices, dates[-1])
 
     summary = {
         "start_date": series[0]["date"],

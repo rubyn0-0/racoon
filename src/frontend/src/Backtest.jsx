@@ -1,7 +1,7 @@
 // The backtest: what a saved portfolio would be worth today. Form, result tiles, holdings table and chart,
 // plus an optional plan of what to buy next. How money flows (inflow, investing frequency) is set on the
 // portfolio itself in Portfolios.jsx. Defaults, chart sizes and the currency are in settings.js.
-import Plot from 'react-plotly.js'
+import Plot from './Plot'
 import { useEffect, useRef, useState } from 'react'
 import { fetchBacktest, fetchPlan } from './api'
 import {
@@ -12,6 +12,7 @@ import {
   baseXAxis,
   baseYAxis,
   changeClass,
+  chartFont,
   chf,
   commitInputOnEnter,
   dateOnly,
@@ -38,7 +39,6 @@ import {
   BACKTEST_HIGHLIGHT_OPACITY,
   BACKTEST_PAID_FILL_OPACITY,
   BACKTEST_RETURN_FILL_OPACITY,
-  CHART_FONT_SIZE,
   CURRENCY,
   DAILY_INTERVAL,
   END_LABEL_SHIFT,
@@ -59,7 +59,7 @@ function endLabel(series, key, text, color) {
     showarrow: false,
     xanchor: 'left',
     xshift: END_LABEL_SHIFT,
-    font: { family: theme.font, size: CHART_FONT_SIZE, color },
+    font: { ...chartFont, color },
   }
 }
 

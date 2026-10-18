@@ -1,30 +1,23 @@
 # Project instructions
 
-- Prefer minimal, targeted changes.
-- Inspect only files relevant to the task.
-- Avoid unnecessary repository-wide searches.
-- Do not refactor unrelated code.
-- Run targeted tests instead of the full test suite.
-- Ask before making major architectural changes.
+## Working style
+- Prefer minimal, targeted changes. Inspect only the files relevant to the task and do not refactor unrelated code.
+- While iterating run targeted tests; run the full suite before finishing.
+- Ask before major architectural changes: new dependencies, schema redesigns, moving or splitting folders.
 
+## Code principles
+- Write clean, readable, maintainable code. Simplicity and correctness come before cleverness or speed of delivery.
+- Choose the simplest robust solution. No overengineering, and no unnecessary abstractions, dependencies, frameworks or configuration.
+- Prefer explicit, understandable logic over compact tricks. Follow established conventions and the existing project style.
 
-1. General Principles
+## Organization
+- Keep concerns separate: data retrieval, data processing, business logic, storage and presentation.
+- Every module and function has one clear responsibility. Follow the existing architecture unless a change is justified.
+- A long file is fine when it is readable, cohesive and touches few areas. Split a file only when it mixes unrelated jobs or changes for unrelated reasons.
+- Do not add files that only forward calls or re-export other files. Fragmentation and pass-through layers bloat the project.
+- Reuse code that is genuinely shared. Do not duplicate existing functionality, and avoid circular dependencies and hidden coupling.
 
-Write clean, readable, maintainable, production-quality code.
-Prioritize simplicity, correctness, and clarity over cleverness.
-Follow established software engineering conventions and best practices.
-Avoid overengineering. Implement the simplest robust solution that satisfies the requirements.
-Do not introduce unnecessary abstractions, dependencies, frameworks, or configuration.
-Prefer explicit, understandable logic over unnecessarily compact code.
-Never sacrifice correctness or maintainability for implementation speed.
-
-2. Architecture and Organization
-
-Maintain a clear separation of concerns between data retrieval, data processing, business logic, storage, and presentation.
-Each module, class, and function should have a clearly defined responsibility.
-Follow the existing project architecture unless a change is justified.
-Avoid creating large, monolithic files or functions.
-Avoid unnecessary fragmentation into excessive small files or wrapper functions.
-Prefer reusable components when functionality is genuinely shared.
-Avoid circular dependencies and hidden coupling.
-Do not duplicate existing functionality.
+## Project conventions
+- Backend (`src/backend`): Python with uv, so run `uv run ...` from that folder. Schema changes are Alembic migrations in `migrations/versions/`; never edit one that has been applied, add a new one.
+- Frontend (`src/frontend`): npm, run from that folder. Colours, sizes, labels and typography live in `src/settings.js`. Every chart goes through `src/Plot.jsx`, so register a new trace type there before using it.
+- Keep each file's existing line endings, and never commit secrets: `.env` files are ignored, `.env.example` shows what is needed.

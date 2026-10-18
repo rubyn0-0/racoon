@@ -1,6 +1,6 @@
 // The price chart: candles or a line, moving averages and volume, drawn with Plotly.
 // Sizes, colors, line widths and padding are in settings.js; the screen around it is Explorer.jsx.
-import Plot from 'react-plotly.js'
+import Plot from './Plot'
 import { useMemo } from 'react'
 import {
   averageKey,
@@ -9,6 +9,7 @@ import {
   baseXAxis,
   baseYAxis,
   candleCenter,
+  chartFont,
   dataBounds,
   dateOnly,
   intervalById,
@@ -264,7 +265,7 @@ function PriceChart({
               xanchor: 'left',
               yanchor: 'top',
               showarrow: false,
-              font: { color: theme.muted },
+              font: chartFont,
             }]
           : [],
         showlegend: data.filter((trace) => trace.showlegend !== false).length > 1,

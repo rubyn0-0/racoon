@@ -11,3 +11,15 @@ wheels/
 
 #other files
 .env
+CLAUDE.local.md
+.claude/
+node_modules/
+prompt.env
+.pytest_cache/
+.env.*
+!.env.example
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

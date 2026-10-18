@@ -16,7 +16,8 @@ import {
   LOCALE,
   MARGIN_BOTTOM,
   MARGIN_TOP,
-  SEARCH_RESULTS,
+  SEARCH_VISIBLE_ROWS,
+  TYPE_TOKENS,
   WEIGHTINGS,
   WINDOW_PADDING,
   theme,
@@ -176,6 +177,7 @@ function adjustedDate(date, segment, amount) {
 
 export function EditableDateField({ label, value, onChange, onCommit }) {
   const inputRef = useRef(null)
+  const pickerRef = useRef(null)
   const segmentEdit = useRef({ id: null, digits: '' })
   const pointerFocus = useRef(false)
   const [blurred, setBlurred] = useState(false)
@@ -184,6 +186,29 @@ export function EditableDateField({ label, value, onChange, onCommit }) {
 
   function selectSegment(segment) {
     requestAnimationFrame(() => inputRef.current?.setSelectionRange(segment.start, segment.end))
+  }
+
+  function openPicker() {
+    const picker = pickerRef.current
+    if (!picker) return
+    try {
+      if (picker.showPicker) {
+        picker.showPicker()
+        return
+      }
+    } catch {
+      // showPicker can refuse (e.g. without a user gesture); fall back to clicking the input
+    }
+    picker.focus()
+    picker.click()
+  }
+
+  function handlePicked(event) {
+    const iso = event.target.value
+    if (!iso) return
+    setBlurred(false)
+    onChange(editableDateValue(iso))
+    onCommit?.(iso)
   }
 
   function handleMouseUp(event) {
@@ -247,39 +272,65 @@ export function EditableDateField({ label, value, onChange, onCommit }) {
   return (
     <label className="field">
       {label}
-      <input
-        ref={inputRef}
-        type="text"
-        inputMode="numeric"
-        value={value}
-        placeholder="DD.MM.YYYY"
-        className={invalid ? 'input-error' : undefined}
-        aria-invalid={invalid}
-        onFocus={(event) => {
-          setBlurred(false)
-          segmentEdit.current = { id: null, digits: '' }
-          if (!pointerFocus.current) event.currentTarget.select()
-          requestAnimationFrame(() => {
-            pointerFocus.current = false
-          })
-        }}
-        onMouseDown={() => {
-          pointerFocus.current = true
-        }}
-        onMouseUp={handleMouseUp}
-        onKeyDown={handleKeyDown}
-        onBlur={() => {
-          setBlurred(true)
-          if (!parsed.error) {
-            if (parsed.date) onChange(editableDateValue(parsed.date))
-            onCommit?.(parsed.date ?? '')
-          }
-        }}
-        onChange={(event) => {
-          segmentEdit.current = { id: null, digits: '' }
-          onChange(event.target.value)
-        }}
-      />
+      <span className="date-input">
+        <input
+          ref={inputRef}
+          type="text"
+          inputMode="numeric"
+          value={value}
+          placeholder="DD.MM.YYYY"
+          className={invalid ? 'input-error' : undefined}
+          aria-invalid={invalid}
+          onFocus={(event) => {
+            setBlurred(false)
+            segmentEdit.current = { id: null, digits: '' }
+            if (!pointerFocus.current) event.currentTarget.select()
+            requestAnimationFrame(() => {
+              pointerFocus.current = false
+            })
+          }}
+          onMouseDown={() => {
+            pointerFocus.current = true
+          }}
+          onMouseUp={handleMouseUp}
+          onKeyDown={handleKeyDown}
+          onBlur={() => {
+            setBlurred(true)
+            if (!parsed.error) {
+              if (parsed.date) onChange(editableDateValue(parsed.date))
+              onCommit?.(parsed.date ?? '')
+            }
+          }}
+          onChange={(event) => {
+            segmentEdit.current = { id: null, digits: '' }
+            onChange(event.target.value)
+          }}
+        />
+        <button
+          type="button"
+          className="date-picker-button"
+          aria-label={`Choose ${label} from calendar`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.preventDefault()
+            openPicker()
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="16" rx="2" />
+            <path d="M3 10h18M8 3v4M16 3v4" />
+          </svg>
+        </button>
+        <input
+          ref={pickerRef}
+          type="date"
+          className="date-picker-native"
+          tabIndex={-1}
+          aria-hidden="true"
+          value={parsed.date ?? ''}
+          onChange={handlePicked}
+        />
+      </span>
     </label>
   )
 }
@@ -340,16 +391,18 @@ export function dataBounds(rows, interval) {
 
 // Chart layout pieces both charts start from; each chart overrides only what differs.
 export const margin = (left, right) => ({ l: left, r: right, t: MARGIN_TOP, b: MARGIN_BOTTOM })
-export const legend = (y) => ({ orientation: 'h', x: 0, y, font: { color: theme.ink } })
+// The one font every chart text starts from; a text that needs another colour spreads it: { ...chartFont, color }.
+export const chartFont = { family: theme.font, size: CHART_FONT_SIZE, color: theme.muted }
+export const legend = (y) => ({ orientation: 'h', x: 0, y, font: { ...chartFont, color: theme.ink } })
 
 export const baseLayout = {
   autosize: true,
   paper_bgcolor: theme.surface,
   plot_bgcolor: theme.surface,
-  font: { family: theme.font, size: CHART_FONT_SIZE, color: theme.muted },
+  font: chartFont,
   dragmode: 'pan',
   hovermode: 'x unified',
-  hoverlabel: { font: { family: theme.font, color: theme.ink }, bgcolor: theme.surface, bordercolor: theme.hairline },
+  hoverlabel: { font: { ...chartFont, color: theme.ink }, bgcolor: theme.surface, bordercolor: theme.hairline },
 }
 
 export const baseXAxis = {
@@ -374,6 +427,7 @@ export function applyThemeVariables() {
   const root = document.documentElement.style
   const variables = {
     ...Object.fromEntries(Object.entries(CSS_VARIABLES).map(([name, key]) => [name, theme[key]])),
+    ...TYPE_TOKENS,
     'chart-height': `${CHART_HEIGHT}px`,
   }
 
@@ -519,8 +573,8 @@ export function StockSearch({
   placeholder = 'Search name or ticker',
   clearOnSelect = false,
   excludedTickers = [],
-  maxResults = SEARCH_RESULTS,
-  visibleRows,
+  maxResults = null,
+  visibleRows = SEARCH_VISIBLE_ROWS,
 }) {
   const listId = useId()
   const listRef = useRef(null)
@@ -558,6 +612,9 @@ export function StockSearch({
     } else if (event.key === 'Enter' && open && results[active]) {
       event.preventDefault()
       pick(results[active])
+    } else if (event.key === 'Tab' && open && results[active] && query.trim() && !event.shiftKey) {
+      // no preventDefault: focus still moves on, the highlighted stock is picked on the way out
+      pick(results[active])
     } else if (event.key === 'Escape') {
       setOpen(false)
     }
@@ -573,6 +630,7 @@ export function StockSearch({
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
+          aria-activedescendant={open && results[active] ? `${listId}-${active}` : undefined}
           autoComplete="off"
           placeholder={placeholder}
           value={open || clearOnSelect ? query : (chosen?.company ?? '')}
@@ -589,15 +647,16 @@ export function StockSearch({
       {open && (
         <ul
           ref={listRef}
-          className={visibleRows ? 'search-results scrollable' : 'search-results'}
+          className="search-results"
           id={listId}
           role="listbox"
-          style={visibleRows ? { '--search-visible-rows': visibleRows } : undefined}
+          style={{ '--search-visible-rows': visibleRows }}
         >
-          {results.length === 0 && <li className="muted">No stock matches.</li>}
+          {results.length === 0 && <li className="muted" role="option" aria-disabled="true">No stock matches.</li>}
           {results.map((stock, index) => (
             <li
               key={stock.ticker}
+              id={`${listId}-${index}`}
               role="option"
               aria-selected={index === active}
               className={index === active ? 'active' : undefined}

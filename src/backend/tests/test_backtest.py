@@ -16,8 +16,10 @@ from racoon.backtest import (
     common_window,
     fixed_rule,
     is_period_end,
+    market_cap_rule,
     ownership_rule,
     plan,
+    size_on,
     target_weights,
 )
 
@@ -61,18 +63,18 @@ def test_cap_is_skipped_when_it_cannot_be_met():
 
 def test_ownership_weights_follow_company_value_without_a_cap():
     holdings = [{"ticker": "A"}, {"ticker": "B"}]
-    rule = ownership_rule(holdings, {"A": 100, "B": 300})
+    rule = ownership_rule(holdings, {"A": [("2000-01-01", 100)], "B": [("2000-01-01", 300)]})
 
-    assert rule(pd.Series({"A": 10, "B": 10})) == pytest.approx({"A": 0.25, "B": 0.75})
+    assert rule({"A": 10, "B": 10}, "2025-01-02") == pytest.approx({"A": 0.25, "B": 0.75})
     # When A's price doubles, A is worth more, so the target moves with it.
-    assert rule(pd.Series({"A": 30, "B": 10})) == pytest.approx({"A": 0.5, "B": 0.5})
+    assert rule({"A": 30, "B": 10}, "2025-01-02") == pytest.approx({"A": 0.5, "B": 0.5})
 
 
 def test_period_ends():
-    dates = ["2025-01-30", "2025-01-31", "2025-02-03", "2025-03-31", "2025-04-01"]
+    dates = ["2025-01-30", "2025-01-31", "2025-02-03", "2025-02-28", "2025-03-31", "2025-04-01"]
 
-    assert [is_period_end(dates, i, MONTHLY) for i in range(5)] == [False, True, False, True, False]
-    assert [is_period_end(dates, i, QUARTERLY) for i in range(5)] == [False, False, False, True, False]
+    assert [is_period_end(dates, i, MONTHLY) for i in range(6)] == [False, True, False, True, True, False]
+    assert [is_period_end(dates, i, QUARTERLY) for i in range(6)] == [False, False, False, False, True, False]
 
 
 def test_allocate_buys_whole_shares_nearest_the_targets():
@@ -221,7 +223,7 @@ def test_owned_shares_alone_are_simply_held():
 
 def test_ownership_backtest_buys_in_proportion_to_company_value():
     closes = prices([("2025-01-02", 10, 10), ("2025-01-03", 10, 10)])
-    rule = ownership_rule([{"ticker": "A"}, {"ticker": "B"}], {"A": 100, "B": 300})
+    rule = ownership_rule([{"ticker": "A"}, {"ticker": "B"}], {"A": [("2000-01-01", 100)], "B": [("2000-01-01", 300)]})
 
     result = backtest(closes, no_dividends(closes), rule, initial=400)
 
@@ -285,3 +287,56 @@ def test_portfolios_with_different_weights_share_the_money_paid_in():
 
     assert [row["invested"] for row in all_a["series"]] == [row["invested"] for row in all_b["series"]]
     assert all_a["series"][-1]["value"] != all_b["series"][-1]["value"]
+
+
+def test_size_on_uses_the_newest_entry_dated_on_or_before_the_day():
+    history = [("2025-01-01", 100), ("2025-03-01", 300), ("2025-06-01", 500)]
+
+    assert size_on(history, "2025-03-01") == 300  # an entry is valid from its own date
+    assert size_on(history, "2025-05-31") == 300
+    assert size_on(history, "2030-01-01") == 500
+    assert size_on(history, "2024-06-01") == 100  # before the first entry: the earliest one
+    assert size_on([("2025-01-01", 7)], "2020-01-01") == 7
+
+
+def synthetic_year():
+    days = pd.bdate_range("2024-01-01", "2024-12-31").strftime("%Y-%m-%d")
+    rows = [(day, 10 + index % 7, 20 + (index * 3) % 11, 5 + index % 5) for index, day in enumerate(days)]
+    return prices(rows, tickers=("A", "B", "C"))
+
+
+def test_size_rules_with_one_size_row_give_exactly_the_results_of_the_single_size_weights():
+    closes = synthetic_year()
+    holdings = [{"ticker": ticker} for ticker in closes.columns]
+    caps = {"A": 5e9, "B": 2e9, "C": 1e9}
+    shares = {"A": 3e6, "B": 8e6, "C": 1e6}
+    rules = dict(initial=5000, inflow=300, invest_frequency=MONTHLY)
+
+    old_market_cap = fixed_rule(target_weights(holdings, MARKET_CAP, caps))
+    new_market_cap = market_cap_rule(holdings, {ticker: [("2026-03-04", cap)] for ticker, cap in caps.items()})
+    assert backtest(closes, no_dividends(closes), new_market_cap, **rules) == backtest(
+        closes, no_dividends(closes), old_market_cap, **rules
+    )
+
+    def old_ownership(prices, day):
+        return target_weights(holdings, OWNERSHIP, {ticker: shares[ticker] * prices[ticker] for ticker in shares})
+
+    new_ownership = ownership_rule(holdings, {ticker: [("2026-03-04", count)] for ticker, count in shares.items()})
+    assert backtest(closes, no_dividends(closes), new_ownership, **rules) == backtest(
+        closes, no_dividends(closes), old_ownership, **rules
+    )
+
+
+def test_size_rules_use_the_size_that_was_valid_on_each_day():
+    holdings = [{"ticker": "A"}, {"ticker": "B"}]
+    cap_history = {"A": [("2025-01-01", 100), ("2025-02-01", 300)], "B": [("2025-01-01", 100), ("2025-02-01", 100)]}
+    prices_that_day = {"A": 10, "B": 10}
+
+    by_cap = market_cap_rule(holdings, cap_history)
+    assert by_cap(prices_that_day, "2025-01-15") == pytest.approx({"A": 0.5, "B": 0.5})
+    assert by_cap(prices_that_day, "2025-02-10") == pytest.approx({"A": 0.75, "B": 0.25})
+    assert by_cap(prices_that_day, "2024-12-01") == pytest.approx({"A": 0.5, "B": 0.5})  # before the first row
+
+    by_ownership = ownership_rule(holdings, cap_history)  # here the history holds share counts
+    assert by_ownership(prices_that_day, "2025-01-15") == pytest.approx({"A": 0.5, "B": 0.5})
+    assert by_ownership(prices_that_day, "2025-02-10") == pytest.approx({"A": 0.75, "B": 0.25})

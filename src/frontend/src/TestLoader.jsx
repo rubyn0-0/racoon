@@ -1,4 +1,4 @@
-// TEMPORARY test tool: delete this file, its use in main.jsx and /api/debug/loading in api.py when done.
+// Dev tool, shown only in npm run dev, unless VITE_DEV_TOOLS=0 (frontend .env). It needs DEV_TOOLS=1 in the backend .env for /api/debug/loading.
 // The red button loads every stock in the CSV through the normal on-demand loader and shows, per stock,
 // what is really in the database (not what the screens believe), so loading can be checked by eye.
 import { useState } from 'react'
@@ -82,7 +82,7 @@ function TestLoader({ stocks, onStocksChanged }) {
                   <tr key={row.ticker} className={row.rows !== row.summary_rows ? 'mismatch' : undefined}>
                     <td>{row.ticker}</td>
                     <td>{row.company}{row.in_smi && <span className="badge">SMI</span>}</td>
-                    <td>{stateOf(row)}{row.job?.error && ` (${row.job.error})`}</td>
+                    <td>{stateOf(row)}{row.job?.error && ` (${row.job.error})`}{row.job?.stuck && ` (stuck? waiting ${row.job.waiting_seconds} s)`}</td>
                     <td className="number">
                       {row.rows.toLocaleString('de-CH')}
                       {row.rows !== row.summary_rows && ` (summary says ${row.summary_rows})`}
