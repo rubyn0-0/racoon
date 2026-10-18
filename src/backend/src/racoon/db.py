@@ -88,6 +88,9 @@ def init_db():
         connection.execute(text(
             "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS start_shares DOUBLE PRECISION"
         ))
+        connection.execute(text(
+            "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS selected BOOLEAN NOT NULL DEFAULT TRUE"
+        ))
         # The weighting list grew (ownership), so the original check has to be replaced.
         connection.execute(text("ALTER TABLE portfolios DROP CONSTRAINT IF EXISTS portfolios_weighting_check"))
         connection.execute(text(

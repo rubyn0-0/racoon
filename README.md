@@ -53,10 +53,12 @@ Health check: http://localhost:8000/api/health
 
 - `GET/POST /api/portfolios`, `GET/PUT/DELETE /api/portfolios/{id}`: saved portfolios.
   Weighting is `equal`, `manual` (your weights, scaled to 100%) or `market_cap`
-  (SMI style: by market cap, max 20% per stock once there are 5 or more stocks).
+  (SMI style: by market cap, max 20% per stock once there are 5 or more stocks). Each portfolio keeps an available
+  stock roster; only holdings whose `selected` flag is true participate in weighting and simulation.
 - `POST /api/portfolios/weights`: resulting weights for an unsaved draft.
-- `GET /api/portfolios/{id}/backtest?start=&end=`: runs the portfolio by its own saved rules (starting capital, new
-  money, investing frequency, optional shares already owned) with whole shares and a cash balance.
+- `GET /api/portfolios/{id}/backtest?start=&end=`: runs the portfolio from its optional opening date (or a custom
+  range) using its saved rules: starting capital, new money, investing frequency and optional transferred shares.
+  If a selected stock has shorter history, the test starts at that stock's first available date and reports it.
 - `GET /api/portfolios/{id}/plan?until=`: what it would buy at the next investing days, at the last close.
 - `GET /api/portfolios/compare?ids=1,2&start=&end=&initial=&inflow=&inflow_frequency=`: several portfolios on the
   same days with the same money.

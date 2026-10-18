@@ -8,10 +8,14 @@ import {
   LoadingNote,
   OptionButtons,
   StockSearch,
+  EditableDateField,
   chf,
   chfCompact,
+  commitInputOnEnter,
   compact,
   displayDate,
+  editableDateValue,
+  parseEditableDate,
   percent,
   useStockData,
   waitForStocks,
@@ -114,7 +118,9 @@ function Portfolios({ stocks, onStocksChanged }) {
           >
             <span className="list-title">{portfolio.name}</span>
             <span className="list-meta">
-              {portfolio.holdings.length} {portfolio.holdings.length === 1 ? 'stock' : 'stocks'}, {weightingById[portfolio.weighting].name.toLowerCase()}
+              {portfolio.holdings.filter((holding) => holding.selected !== false).length}{' '}
+              {portfolio.holdings.filter((holding) => holding.selected !== false).length === 1 ? 'stock' : 'stocks'},{' '}
+              {weightingById[portfolio.weighting].name.toLowerCase()}
             </span>
           </button>
         ))}
@@ -175,8 +181,9 @@ function toPercents(holdings) {
 
 function initialWeights(portfolio) {
   if (!portfolio) return {}
-  const tickers = portfolio.holdings.map((holding) => holding.ticker)
-  return portfolio.weighting === WEIGHTING.MANUAL ? toPercents(portfolio.holdings) : evenSplit(tickers)
+  const selected = portfolio.holdings.filter((holding) => holding.selected !== false)
+  const tickers = selected.map((holding) => holding.ticker)
+  return portfolio.weighting === WEIGHTING.MANUAL ? toPercents(selected) : evenSplit(tickers)
 }
 
 const round2 = (value) => Math.round(value * 100) / 100
@@ -197,8 +204,9 @@ function makeDraft({
     weighting,
     holdings: rows.map((row) => ({
       ticker: row.ticker,
-      weight: weighting === WEIGHTING.MANUAL ? row.weight : null,
-      start_shares: startDate ? row.startShares : null,
+      selected: row.selected,
+      weight: weighting === WEIGHTING.MANUAL && row.selected ? row.weight : null,
+      start_shares: row.inStartingPosition ? row.startShares : null,
     })),
     initial_capital: round2(initialCapital),
     invest_frequency: investFrequency,
@@ -217,6 +225,8 @@ function savedDraft(portfolio) {
       ticker: holding.ticker,
       weight: percents[holding.ticker],
       startShares: holding.start_shares ?? 0,
+      selected: holding.selected !== false,
+      inStartingPosition: holding.start_shares !== null,
     })),
     initialCapital: portfolio.initial_capital,
     investFrequency: portfolio.invest_frequency,
@@ -227,20 +237,9 @@ function savedDraft(portfolio) {
 }
 
 // A percent control: arrows (1% steps), a slider and a number box. It can only grow by the unallocated percent.
-function WeightControl({ label, value, free, onChange }) {
+function WeightControl({ label, value, onChange }) {
   return (
     <span className="weight-control">
-      <button type="button" className="quiet" aria-label={`Less for ${label}`} disabled={value <= 0} onClick={() => onChange(value - WEIGHT_STEP)}>▼</button>
-      <input
-        type="range"
-        min="0"
-        max={WEIGHT_TOTAL}
-        step={WEIGHT_STEP}
-        value={value}
-        aria-label={`Weight for ${label}`}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-      <button type="button" className="quiet" aria-label={`More for ${label}`} disabled={free <= 0} onClick={() => onChange(value + WEIGHT_STEP)}>▲</button>
       <input
         type="number"
         className="weight-input"
@@ -249,6 +248,15 @@ function WeightControl({ label, value, free, onChange }) {
         step={WEIGHT_STEP}
         value={value}
         aria-label={`Weight for ${label} in percent`}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <input
+        type="range"
+        min="0"
+        max={WEIGHT_TOTAL}
+        step={WEIGHT_STEP}
+        value={value}
+        aria-label={`Weight for ${label}`}
         onChange={(event) => onChange(Number(event.target.value))}
       />
       %
@@ -262,50 +270,70 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
   const source = portfolio ?? template
   const [name, setName] = useState(source?.name ?? '')
   const [weighting, setWeighting] = useState(source?.weighting ?? DEFAULT_WEIGHTING)
+  const [availableTickers, setAvailableTickers] = useState(() => (
+    (source?.holdings ?? []).map((holding) => holding.ticker)
+  ))
   const [weights, setWeights] = useState(() => initialWeights(source))
   const [initialCapital, setInitialCapital] = useState(String(source?.initial_capital ?? INITIAL_CAPITAL_DEFAULT))
   const [investFrequency, setInvestFrequency] = useState(source?.invest_frequency ?? DEFAULT_INVEST_FREQUENCY)
   const [inflowAmount, setInflowAmount] = useState(String(source?.inflow_amount ?? 0))
   const [inflowFrequency, setInflowFrequency] = useState(source?.inflow_frequency ?? DEFAULT_INFLOW_FREQUENCY)
-  const [startOn, setStartOn] = useState(Boolean(source?.start_date))
-  const [startDate, setStartDate] = useState(source?.start_date ?? '')
+  const [openingDate, setOpeningDate] = useState(() => editableDateValue(source?.start_date))
+  const [positionTickers, setPositionTickers] = useState(() => (
+    (source?.holdings ?? []).filter((holding) => holding.start_shares !== null).map((holding) => holding.ticker)
+  ))
   const [startShares, setStartShares] = useState(() => Object.fromEntries(
     (source?.holdings ?? []).map((holding) => [holding.ticker, String(holding.start_shares ?? 0)]),
   ))
   const [closes, setCloses] = useState({})
+  const [closesDate, setClosesDate] = useState('')
   const [preview, setPreview] = useState({})
   const [previewError, setPreviewError] = useState('')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [confirmingRemove, setConfirmingRemove] = useState(null)
 
   const manual = weighting === WEIGHTING.MANUAL
   const tickers = Object.keys(weights).sort()
   const tickersKey = tickers.join(',')
-  const included = stocks.filter((stock) => stock.ticker in weights)
-  // The current SMI members are always listed; any other stock appears once you add it with the search box.
-  const visibleStocks = stocks.filter((stock) => stock.in_smi || stock.ticker in weights)
+  const orderedAvailableTickers = [
+    ...availableTickers.filter((ticker) => ticker in weights),
+    ...availableTickers.filter((ticker) => !(ticker in weights)),
+  ]
+  const availableStocks = orderedAvailableTickers
+    .map((ticker) => stocks.find((stock) => stock.ticker === ticker))
+    .filter(Boolean)
   const allocated = tickers.reduce((sum, ticker) => sum + weights[ticker], 0)
   const unallocated = WEIGHT_TOTAL - allocated
 
-  // Starting position: the shares you own, valued at the close on the start date.
+  const parsedOpeningDate = parseEditableDate(openingDate)
+  const startDate = parsedOpeningDate.date
+
+  // Transferred shares are independent of the strategy selection and are valued on the opening date.
   const sharesOf = (ticker) => Number(startShares[ticker]) || 0
-  const priceOn = (ticker) => closes[ticker] ?? null
-  const holdingsValue = tickers.reduce((sum, ticker) => sum + sharesOf(ticker) * (priceOn(ticker) ?? 0), 0)
-  const dated = included.filter((stock) => stock.start_date)
-  const startMin = dated.reduce((latest, stock) => (stock.start_date > latest ? stock.start_date : latest), '')
-  const startMax = dated.reduce((first, stock) => (!first || stock.end_date < first ? stock.end_date : first), '')
+  const priceOn = (ticker) => (startDate && closesDate === startDate ? closes[ticker] ?? null : null)
+  const positionTickersKey = [...positionTickers].sort().join(',')
+  const holdingsValue = positionTickers.every((ticker) => priceOn(ticker) !== null)
+    ? positionTickers.reduce((sum, ticker) => sum + sharesOf(ticker) * priceOn(ticker), 0)
+    : null
 
   const draft = makeDraft({
     name: name.trim(),
     weighting,
-    rows: tickers.map((ticker) => ({ ticker, weight: weights[ticker], startShares: sharesOf(ticker) })),
+    rows: availableTickers.map((ticker) => ({
+      ticker,
+      selected: ticker in weights,
+      weight: weights[ticker],
+      startShares: sharesOf(ticker),
+      inStartingPosition: positionTickers.includes(ticker),
+    })),
     initialCapital: Number(initialCapital) || 0,
     investFrequency,
     inflowAmount: Number(inflowAmount) || 0,
     inflowFrequency,
-    startDate: startOn ? startDate : null,
+    startDate,
   })
   const changed = !portfolio || JSON.stringify(draft) !== JSON.stringify(savedDraft(portfolio))
 
@@ -314,20 +342,25 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
   const [wanted, setWanted] = useState([])
   const data = useStockData(wanted, onStocksChanged)
   const allLoaded = tickers.every((ticker) => stocks.find((stock) => stock.ticker === ticker)?.loaded)
+  const positionsLoaded = positionTickers.every((ticker) => stocks.find((stock) => stock.ticker === ticker)?.loaded)
   const needsSizes = weighting === WEIGHTING.MARKET_CAP || weighting === WEIGHTING.OWNERSHIP
 
   // The close of each stock on the start date, to value the starting shares (one small request).
   useEffect(() => {
-    if (!startOn || !startDate || !tickersKey || !allLoaded) return undefined
+    if (!positionTickersKey || !startDate || !positionsLoaded) return undefined
 
     let current = true
-    fetchClosesOn(tickersKey.split(','), startDate)
-      .then((result) => current && setCloses(result))
+    fetchClosesOn(positionTickersKey.split(','), startDate)
+      .then((result) => {
+        if (!current) return
+        setCloses(result)
+        setClosesDate(startDate)
+      })
       .catch((err) => current && setPreviewError(`Could not load prices: ${err.message}`))
     return () => {
       current = false
     }
-  }, [startOn, startDate, tickersKey, allLoaded])
+  }, [positionTickersKey, startDate, positionsLoaded])
 
   // Ask the backend for the resulting weights while editing; it owns the weighting rules.
   // Your weights are just the percentages you typed, so they need no round trip.
@@ -368,18 +401,95 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
   }
 
   function addStock(ticker) {
-    if (!(ticker in weights)) toggleStock(ticker)
+    if (availableTickers.includes(ticker)) return
+    touch(() => {
+      setAvailableTickers((current) => [...current, ticker])
+      setWanted((current) => (current.includes(ticker) ? current : [...current, ticker]))
+      setStartShares((current) => ({ ...current, [ticker]: '0' }))
+    })
   }
 
   function toggleStock(ticker) {
     touch(() => {
-      if (!(ticker in weights)) setWanted((current) => (current.includes(ticker) ? current : [...current, ticker]))
       setWeights((current) => {
-        if (!(ticker in current)) return { ...current, [ticker]: 0 }
+        if (!(ticker in current)) {
+          setWanted((wanted) => (wanted.includes(ticker) ? wanted : [...wanted, ticker]))
+          return { ...current, [ticker]: 0 }
+        }
         const next = { ...current }
         delete next[ticker]
         return next
       })
+      if (ticker in weights) {
+        setStartShares((current) => ({ ...current, [ticker]: '0' }))
+        setPositionTickers((current) => current.filter((item) => item !== ticker))
+      }
+    })
+  }
+
+  function toggleAllStocks() {
+    touch(() => {
+      if (tickers.length === availableTickers.length) {
+        setWeights({})
+        setStartShares((current) => Object.fromEntries(
+          Object.entries(current).map(([ticker]) => [ticker, '0']),
+        ))
+        setPositionTickers([])
+        return
+      }
+
+      const missing = availableTickers.filter((ticker) => !(ticker in weights))
+      setWanted((current) => [...new Set([...current, ...missing])])
+      setWeights((current) => Object.fromEntries(
+        availableTickers.map((ticker) => [ticker, current[ticker] ?? 0]),
+      ))
+    })
+  }
+
+  function removeStock(ticker) {
+    touch(() => {
+      setAvailableTickers((current) => current.filter((item) => item !== ticker))
+      setWanted((current) => current.filter((item) => item !== ticker))
+      setWeights((current) => {
+        const next = { ...current }
+        delete next[ticker]
+        return next
+      })
+      setStartShares((current) => {
+        const next = { ...current }
+        delete next[ticker]
+        return next
+      })
+      setPositionTickers((current) => current.filter((item) => item !== ticker))
+      setCloses((current) => {
+        const next = { ...current }
+        delete next[ticker]
+        return next
+      })
+      setPreview((current) => {
+        const next = { ...current }
+        delete next[ticker]
+        return next
+      })
+      setConfirmingRemove(null)
+    })
+  }
+
+  function addPosition(ticker) {
+    if (positionTickers.includes(ticker)) return
+    touch(() => {
+      setPositionTickers((current) => [...current, ticker])
+      setStartShares((current) => ({ ...current, [ticker]: '0' }))
+      if (!stocks.find((stock) => stock.ticker === ticker)?.loaded) {
+        setWanted((current) => (current.includes(ticker) ? current : [...current, ticker]))
+      }
+    })
+  }
+
+  function removePosition(ticker) {
+    touch(() => {
+      setPositionTickers((current) => current.filter((item) => item !== ticker))
+      setStartShares((current) => ({ ...current, [ticker]: '0' }))
     })
   }
 
@@ -400,7 +510,7 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
     if (manual && (allocated !== WEIGHT_TOTAL || tickers.some((ticker) => weights[ticker] < 1))) {
       return setError(`Your weights must add up to ${WEIGHT_TOTAL}%, with at least 1% per stock.`)
     }
-    if (startOn && !startDate) return setError('Pick the date of the starting position.')
+    if (parsedOpeningDate.error) return setError(parsedOpeningDate.error)
 
     setSaving(true)
     setError('')
@@ -433,7 +543,7 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
     <section className="panel" aria-label="Portfolio">
       <h2>{portfolio ? portfolio.name : 'New portfolio'}</h2>
 
-      <form className="portfolio-form" onSubmit={save}>
+      <form className="portfolio-form" onSubmit={save} onKeyDown={commitInputOnEnter}>
         <label className="field">
           Name
           <input
@@ -445,104 +555,25 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
           />
         </label>
 
-        <div className="field">
-          <OptionButtons
-            label="Weighting"
-            showLabel
-            options={WEIGHTINGS}
-            isActive={(id) => weighting === id}
-            onSelect={chooseWeighting}
-          />
-          <p className="muted">{WEIGHTING_HELP[weighting]}</p>
-        </div>
-
-        <StockSearch
-          label="Add a stock"
-          placeholder="Search any of the stocks by name or ticker"
-          stocks={stocks}
-          value=""
-          clearOnSelect
-          onSelect={addStock}
-        />
-
-        <div className="table-scroll">
-          <table className="holdings-table">
-            <thead>
-              <tr>
-                <th scope="col">Stock</th>
-                {manual && <th scope="col">Your weight</th>}
-                {weighting === WEIGHTING.MARKET_CAP && <th scope="col" className="number">Market cap</th>}
-                {weighting === WEIGHTING.OWNERSHIP && <th scope="col" className="number">Shares in issue</th>}
-                <th scope="col">Share of portfolio</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleStocks.map((stock) => {
-                const isIncluded = stock.ticker in weights
-                const share = manual ? weights[stock.ticker] / WEIGHT_TOTAL : preview[stock.ticker]
-
-                return (
-                  <tr key={stock.ticker} className={isIncluded ? undefined : 'excluded'}>
-                    <td>
-                      <label className="check">
-                        <input type="checkbox" checked={isIncluded} onChange={() => toggleStock(stock.ticker)} />
-                        {stock.company}
-                      </label>
-                    </td>
-                    {manual && (
-                      <td>
-                        {isIncluded && (
-                          <WeightControl
-                            label={stock.company}
-                            value={weights[stock.ticker]}
-                            free={unallocated}
-                            onChange={(value) => changeWeight(stock.ticker, value)}
-                          />
-                        )}
-                      </td>
-                    )}
-                    {weighting === WEIGHTING.MARKET_CAP && (
-                      <td className="number muted">{stock.market_cap ? chfCompact(stock.market_cap) : 'Not loaded'}</td>
-                    )}
-                    {weighting === WEIGHTING.OWNERSHIP && (
-                      <td className="number muted">{stock.shares_outstanding ? compact(stock.shares_outstanding) : 'Not loaded'}</td>
-                    )}
-                    <td>
-                      {isIncluded && share !== undefined && !previewError && (
-                        <span className="share">
-                          <span className="share-bar" aria-hidden="true">
-                            <span style={{ width: percent(share) }} />
-                          </span>
-                          {percent(share)}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {manual && tickers.length > 0 && (
-          <p className={unallocated === 0 ? 'muted' : 'unallocated'} role="status">
-            {unallocated === 0 && `All ${WEIGHT_TOTAL}% is spread out.`}
-            {unallocated > 0 && `${unallocated}% unallocated. Give it to a stock to reach ${WEIGHT_TOTAL}%.`}
-          </p>
-        )}
-
         <fieldset className="rules">
           <legend>Starting Capital &amp; Cash Inflows</legend>
-          <label className="field">
-            Starting capital (CHF)
-            <input
-              type="number"
-              min="0"
-              step={CAPITAL_STEP}
-              value={initialCapital}
-              onChange={(event) => touch(() => setInitialCapital(event.target.value))}
+          <div className="field-row">
+            <EditableDateField
+              label="Portfolio opening date"
+              value={openingDate}
+              onChange={(value) => touch(() => setOpeningDate(value))}
             />
-          </label>
+            <label className="field">
+              Starting capital (CHF)
+              <input
+                type="number"
+                min="0"
+                step={CAPITAL_STEP}
+                value={initialCapital}
+                onChange={(event) => touch(() => setInitialCapital(event.target.value))}
+              />
+            </label>
+          </div>
           <div className="field-row">
             <label className="field">
               New money per period (CHF)
@@ -554,7 +585,7 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
                 onChange={(event) => touch(() => setInflowAmount(event.target.value))}
               />
             </label>
-            <div className="field">
+            <div className="field rule-option">
               <OptionButtons
                 label="New money arrives"
                 showLabel
@@ -562,10 +593,9 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
                 isActive={(id) => inflowFrequency === id}
                 onSelect={(id) => touch(() => setInflowFrequency(id))}
               />
-              <p className="muted">On the last trading day of the period.</p>
             </div>
           </div>
-          <div className="field">
+          <div className="field rule-option">
             <OptionButtons
               label="Invest the cash"
               showLabel
@@ -576,49 +606,190 @@ function PortfolioEditor({ stocks, portfolio, template, onSaved, onDeleted, onCo
           </div>
         </fieldset>
 
+        <fieldset className="rules investment-strategy">
+          <legend>Investment Strategy</legend>
+          <div className="field rule-option">
+            <OptionButtons
+              label="Weighting"
+              showLabel
+              options={WEIGHTINGS}
+              isActive={(id) => weighting === id}
+              onSelect={chooseWeighting}
+            />
+          </div>
+          <p className="muted">{WEIGHTING_HELP[weighting]}</p>
+          <StockSearch
+            label="Add a stock"
+            placeholder="Search any stock by name or ticker"
+            stocks={stocks}
+            value=""
+            clearOnSelect
+            excludedTickers={availableTickers}
+            maxResults={null}
+            visibleRows={7}
+            onSelect={addStock}
+          />
+          <span className="option-label">Stocks</span>
+          {availableTickers.length > 0 && (
+            <button type="button" className="quiet select-all" onClick={toggleAllStocks}>
+              {tickers.length === availableTickers.length ? 'Deselect all' : 'Select all'}
+            </button>
+          )}
+          {availableTickers.length === 0 ? (
+            <p className="muted">Search for a stock above to add it here.</p>
+          ) : (
+            <div className="table-scroll">
+              <table className="holdings-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Stock</th>
+                    {manual && <th scope="col" className="weight-share-heading">Share of portfolio</th>}
+                    {weighting === WEIGHTING.MARKET_CAP && <th scope="col" className="number">Market cap</th>}
+                    {weighting === WEIGHTING.OWNERSHIP && <th scope="col" className="number">Shares in issue</th>}
+                    {!manual && <th scope="col">Share of portfolio</th>}
+                    <th scope="col" className="stock-actions" aria-label="Stock actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {availableStocks.map((stock) => {
+                    const isIncluded = stock.ticker in weights
+                    const share = manual ? weights[stock.ticker] / WEIGHT_TOTAL : preview[stock.ticker]
+
+                    return (
+                      <tr key={stock.ticker} className={isIncluded ? undefined : 'excluded'}>
+                        <td>
+                          <label className="check">
+                            <input type="checkbox" checked={isIncluded} onChange={() => toggleStock(stock.ticker)} />
+                            {stock.company}
+                          </label>
+                        </td>
+                        {manual && (
+                          <td className="weight-share-cell">
+                            {isIncluded && (
+                              <WeightControl
+                                label={stock.company}
+                                value={weights[stock.ticker]}
+                                onChange={(value) => changeWeight(stock.ticker, value)}
+                              />
+                            )}
+                          </td>
+                        )}
+                        {weighting === WEIGHTING.MARKET_CAP && (
+                          <td className="number muted">{stock.market_cap ? chfCompact(stock.market_cap) : 'Not loaded'}</td>
+                        )}
+                        {weighting === WEIGHTING.OWNERSHIP && (
+                          <td className="number muted">{stock.shares_outstanding ? compact(stock.shares_outstanding) : 'Not loaded'}</td>
+                        )}
+                        {!manual && (
+                          <td>
+                            {isIncluded && share !== undefined && !previewError && (
+                              <span className="share">
+                                <span className="share-bar" aria-hidden="true">
+                                  <span style={{ width: percent(share) }} />
+                                </span>
+                                {percent(share)}
+                              </span>
+                            )}
+                          </td>
+                        )}
+                        <td className="stock-actions">
+                          {confirmingRemove === stock.ticker ? (
+                            <span className="remove-confirmation">
+                              <button type="button" className="danger" onClick={() => removeStock(stock.ticker)}>
+                                Remove
+                              </button>
+                              <button type="button" className="quiet" onClick={() => setConfirmingRemove(null)}>
+                                Keep
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="remove-stock"
+                              aria-label={`Remove ${stock.company}`}
+                              title={`Remove ${stock.company}`}
+                              onClick={() => setConfirmingRemove(stock.ticker)}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {manual && tickers.length > 0 && (
+            <p className={unallocated === 0 ? 'muted' : 'unallocated'} role="status">
+              {unallocated === 0 && `All ${WEIGHT_TOTAL}% is spread out.`}
+              {unallocated > 0 && `${unallocated}% unallocated. Give it to a stock to reach ${WEIGHT_TOTAL}%.`}
+            </p>
+          )}
+        </fieldset>
+
         <fieldset className="rules">
           <legend>Starting position</legend>
-          <label className="check">
-            <input type="checkbox" checked={startOn} onChange={(event) => touch(() => setStartOn(event.target.checked))} />
-            Start with shares I already own
-          </label>
-          {startOn && (
-            <>
-              <label className="field">
-                Owned on this date
-                <input
-                  type="date"
-                  value={startDate}
-                  min={startMin}
-                  max={startMax}
-                  onChange={(event) => touch(() => setStartDate(event.target.value))}
-                />
-              </label>
-              {included.length === 0 ? (
-                <p className="muted">Pick stocks above, then enter how many shares of each you own.</p>
-              ) : (
-                <div className="share-inputs">
-                  {included.map((stock) => (
-                    <label key={stock.ticker} className="field">
-                      {stock.company}
+          <p className="muted">Transfer existing shares when the portfolio opens.</p>
+          <StockSearch
+            label="Add an existing position"
+            placeholder="Search stocks already added above"
+            stocks={availableStocks}
+            value=""
+            clearOnSelect
+            excludedTickers={positionTickers}
+            maxResults={null}
+            visibleRows={7}
+            onSelect={addPosition}
+          />
+          {positionTickers.length > 0 && (
+            <div className="position-list" aria-label="Starting positions">
+              {positionTickers.map((ticker) => {
+                const stock = stocks.find((item) => item.ticker === ticker)
+                if (!stock) return null
+                const price = priceOn(ticker)
+                const value = price === null ? null : sharesOf(ticker) * price
+
+                return (
+                  <div key={ticker} className="position-row">
+                    <span className="position-company">{stock.company}</span>
+                    <label className="position-shares">
+                      <span>Shares owned</span>
                       <input
                         type="number"
                         min="0"
                         step="1"
-                        value={startShares[stock.ticker] ?? '0'}
+                        value={startShares[ticker] ?? '0'}
                         aria-label={`Shares of ${stock.company} owned`}
-                        onChange={(event) => touch(() => setStartShares((current) => ({ ...current, [stock.ticker]: event.target.value })))}
+                        onChange={(event) => touch(() => setStartShares((current) => ({ ...current, [ticker]: event.target.value })))}
                       />
                     </label>
-                  ))}
-                </div>
-              )}
-              <p className="muted" role="status">
+                    <span className="position-value" aria-live="polite">
+                      {startDate
+                        ? value === null ? 'Price unavailable' : chf(value)
+                        : 'Set an opening date to value shares'}
+                    </span>
+                    <button
+                      type="button"
+                      className="remove-stock"
+                      aria-label={`Remove ${stock.company} starting position`}
+                      title={`Remove ${stock.company} starting position`}
+                      onClick={() => removePosition(ticker)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )
+              })}
+              <p className="muted position-total" role="status">
                 {startDate
-                  ? `These shares are worth ${chf(holdingsValue)} on ${displayDate(startDate)}. The starting capital above is added on top.`
-                  : 'Pick a date to see what the shares are worth.'}
+                  ? holdingsValue === null
+                    ? `Some opening-date prices are unavailable for ${displayDate(startDate)}.`
+                    : `Total transferred value: ${chf(holdingsValue)} on ${displayDate(startDate)}. Starting capital is added on top.`
+                  : 'Enter a portfolio opening date to calculate the transferred value.'}
               </p>
-            </>
+            </div>
           )}
         </fieldset>
 

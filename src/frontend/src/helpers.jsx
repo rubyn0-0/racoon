@@ -93,6 +93,197 @@ export function displayDate(value) {
   return `${day}.${month}.${year}`
 }
 
+// Accept a precise Swiss-style date or just a month/year or year. Partial dates
+// resolve to the first day of that period.
+export function parseEditableDate(value) {
+  const input = value.trim()
+  if (!input) return { date: null, error: '' }
+
+  let day = 1
+  let month = 1
+  let year
+  let match
+
+  if ((match = input.match(/^(\d{4})$/))) {
+    year = Number(match[1])
+  } else if ((match = input.match(/^(\d{1,2})\.(\d{4})$/))) {
+    month = Number(match[1])
+    year = Number(match[2])
+  } else if ((match = input.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/))) {
+    day = Number(match[1])
+    month = Number(match[2])
+    year = Number(match[3])
+  } else {
+    return { date: null, error: 'Use YYYY, MM.YYYY, or DD.MM.YYYY.' }
+  }
+
+  const candidate = new Date(Date.UTC(year, month - 1, day))
+  if (
+    year < 1
+    || month < 1
+    || month > 12
+    || day < 1
+    || candidate.getUTCFullYear() !== year
+    || candidate.getUTCMonth() !== month - 1
+    || candidate.getUTCDate() !== day
+  ) {
+    return { date: null, error: 'Enter a valid date.' }
+  }
+
+  return {
+    date: `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    error: '',
+  }
+}
+
+export function editableDateValue(date) {
+  return date ? displayDate(date) : ''
+}
+
+const DATE_SEGMENTS = [
+  { id: 'day', start: 0, end: 2, width: 2 },
+  { id: 'month', start: 3, end: 5, width: 2 },
+  { id: 'year', start: 6, end: 10, width: 4 },
+]
+
+function dateSegmentAt(position) {
+  if (position <= 2) return DATE_SEGMENTS[0]
+  if (position <= 5) return DATE_SEGMENTS[1]
+  return DATE_SEGMENTS[2]
+}
+
+function adjustedDate(date, segment, amount) {
+  const [year, month, day] = date.split('-').map(Number)
+  const result = new Date(Date.UTC(year, month - 1, day))
+
+  if (segment.id === 'day') {
+    result.setUTCDate(result.getUTCDate() + amount)
+  } else if (segment.id === 'month') {
+    result.setUTCDate(1)
+    result.setUTCMonth(result.getUTCMonth() + amount)
+    const lastDay = new Date(Date.UTC(result.getUTCFullYear(), result.getUTCMonth() + 1, 0)).getUTCDate()
+    result.setUTCDate(Math.min(day, lastDay))
+  } else {
+    const nextYear = Math.min(9999, Math.max(1, year + amount))
+    result.setUTCDate(1)
+    result.setUTCFullYear(nextYear)
+    const lastDay = new Date(Date.UTC(nextYear, month, 0)).getUTCDate()
+    result.setUTCDate(Math.min(day, lastDay))
+  }
+
+  return result.toISOString().slice(0, 10)
+}
+
+export function EditableDateField({ label, value, onChange, onCommit }) {
+  const inputRef = useRef(null)
+  const segmentEdit = useRef({ id: null, digits: '' })
+  const pointerFocus = useRef(false)
+  const [blurred, setBlurred] = useState(false)
+  const parsed = parseEditableDate(value)
+  const invalid = blurred && Boolean(value.trim()) && Boolean(parsed.error)
+
+  function selectSegment(segment) {
+    requestAnimationFrame(() => inputRef.current?.setSelectionRange(segment.start, segment.end))
+  }
+
+  function handleMouseUp(event) {
+    const input = event.currentTarget
+    if (!/^\d{2}\.\d{2}\.\d{4}$/.test(value) || input.selectionStart !== input.selectionEnd) return
+    const segment = dateSegmentAt(input.selectionStart)
+    segmentEdit.current = { id: segment.id, digits: '' }
+    event.preventDefault()
+    input.setSelectionRange(segment.start, segment.end)
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (parsed.error) {
+        setBlurred(true)
+        return
+      }
+      event.currentTarget.blur()
+      return
+    }
+
+    if (!/^\d{2}\.\d{2}\.\d{4}$/.test(value)) return
+
+    const input = event.currentTarget
+    const wholeDateSelected = input.selectionStart === 0 && input.selectionEnd === value.length
+    if (wholeDateSelected && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+
+    const current = dateSegmentAt(input.selectionStart)
+    const currentIndex = DATE_SEGMENTS.findIndex((segment) => segment.id === current.id)
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      const direction = event.key === 'ArrowLeft' ? -1 : 1
+      const next = DATE_SEGMENTS[Math.min(DATE_SEGMENTS.length - 1, Math.max(0, currentIndex + direction))]
+      segmentEdit.current = { id: next.id, digits: '' }
+      selectSegment(next)
+      return
+    }
+
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if (!parsed.date) return
+      event.preventDefault()
+      onChange(editableDateValue(adjustedDate(parsed.date, current, event.key === 'ArrowUp' ? 1 : -1)))
+      segmentEdit.current = { id: current.id, digits: '' }
+      selectSegment(current)
+      return
+    }
+
+    if (!/^\d$/.test(event.key) || input.selectionStart !== current.start || input.selectionEnd !== current.end) return
+
+    event.preventDefault()
+    const previous = segmentEdit.current.id === current.id ? segmentEdit.current.digits : ''
+    const digits = previous.length >= current.width ? event.key : previous + event.key
+    segmentEdit.current = { id: current.id, digits }
+    const replacement = digits.padStart(current.width, '0')
+    onChange(`${value.slice(0, current.start)}${replacement}${value.slice(current.end)}`)
+    selectSegment(current)
+  }
+
+  return (
+    <label className="field">
+      {label}
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="numeric"
+        value={value}
+        placeholder="DD.MM.YYYY"
+        className={invalid ? 'input-error' : undefined}
+        aria-invalid={invalid}
+        onFocus={(event) => {
+          setBlurred(false)
+          segmentEdit.current = { id: null, digits: '' }
+          if (!pointerFocus.current) event.currentTarget.select()
+          requestAnimationFrame(() => {
+            pointerFocus.current = false
+          })
+        }}
+        onMouseDown={() => {
+          pointerFocus.current = true
+        }}
+        onMouseUp={handleMouseUp}
+        onKeyDown={handleKeyDown}
+        onBlur={() => {
+          setBlurred(true)
+          if (!parsed.error) {
+            if (parsed.date) onChange(editableDateValue(parsed.date))
+            onCommit?.(parsed.date ?? '')
+          }
+        }}
+        onChange={(event) => {
+          segmentEdit.current = { id: null, digits: '' }
+          onChange(event.target.value)
+        }}
+      />
+    </label>
+  )
+}
+
 // ISO week number (weeks start on Monday, week 1 holds the first Thursday).
 function isoWeek(date) {
   const thursday = new Date(date)
@@ -216,6 +407,20 @@ export function OptionButtons({ label, options, isActive, onSelect, showLabel = 
   )
 }
 
+// Forms use Enter to commit the ordinary field being edited, not to submit the
+// whole form. Search boxes keep Enter for choosing an autocomplete result.
+export function commitInputOnEnter(event) {
+  if (event.key !== 'Enter' || event.defaultPrevented || event.target.tagName !== 'INPUT') return
+  if (!['text', 'number', 'date'].includes(event.target.type)) return
+
+  event.preventDefault()
+  if (!event.target.checkValidity()) {
+    event.target.reportValidity()
+    return
+  }
+  event.target.blur()
+}
+
 // Loading prices on demand. The backend fetches a stock's history the first time something asks for it.
 // This hook asks (and keeps asking once a second) until every stock is there, then calls `onChange` once
 // so the screen can refresh what it knows about the stocks (dates, sizes) and drop any cached prices.
@@ -306,17 +511,35 @@ export function LoadingNote({ data, what }) {
 
 // A search box over the stock list: type a name or ticker, pick from the list (current SMI members first).
 // When closed the box shows the name of the chosen stock; with `clearOnSelect` it empties after a pick.
-export function StockSearch({ stocks, value, onSelect, label, placeholder = 'Search name or ticker', clearOnSelect = false }) {
+export function StockSearch({
+  stocks,
+  value,
+  onSelect,
+  label,
+  placeholder = 'Search name or ticker',
+  clearOnSelect = false,
+  excludedTickers = [],
+  maxResults = SEARCH_RESULTS,
+  visibleRows,
+}) {
   const listId = useId()
+  const listRef = useRef(null)
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
 
   const chosen = stocks.find((stock) => stock.ticker === value)
   const needle = query.trim().toLowerCase()
-  const results = stocks
-    .filter((stock) => !needle || stock.company.toLowerCase().includes(needle) || stock.ticker.toLowerCase().includes(needle))
-    .slice(0, SEARCH_RESULTS)
+  const excluded = new Set(excludedTickers)
+  const matches = stocks.filter((stock) => (
+    !excluded.has(stock.ticker)
+    && (!needle || stock.company.toLowerCase().includes(needle) || stock.ticker.toLowerCase().includes(needle))
+  ))
+  const results = maxResults === null ? matches : matches.slice(0, maxResults)
+
+  useEffect(() => {
+    if (open) listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' })
+  }, [active, open])
 
   function pick(stock) {
     onSelect(stock.ticker)
@@ -364,7 +587,13 @@ export function StockSearch({ stocks, value, onSelect, label, placeholder = 'Sea
         />
       </label>
       {open && (
-        <ul className="search-results" id={listId} role="listbox">
+        <ul
+          ref={listRef}
+          className={visibleRows ? 'search-results scrollable' : 'search-results'}
+          id={listId}
+          role="listbox"
+          style={visibleRows ? { '--search-visible-rows': visibleRows } : undefined}
+        >
           {results.length === 0 && <li className="muted">No stock matches.</li>}
           {results.map((stock, index) => (
             <li
@@ -395,8 +624,9 @@ export function LimitNote({ limitedBy }) {
   if (!limitedBy) return null
 
   return (
-    <p className="muted">
-      Starts {displayDate(limitedBy.date)} because {limitedBy.company} was only listed then.
+    <p className="muted" role="status">
+      Stock data for {limitedBy.company} is only available from {displayDate(limitedBy.date)}. Remove it to use a
+      longer time frame.
     </p>
   )
 }

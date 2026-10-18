@@ -9,6 +9,7 @@ import {
   OptionButtons,
   StockSearch,
   changeClass,
+  commitInputOnEnter,
   dataBounds,
   dateOnly,
   periodLabel,
@@ -242,7 +243,7 @@ function Explorer({ stocks, onStocksChanged }) {
 
   return (
     <>
-      <form className="toolbar" onSubmit={loadPrices}>
+      <form className="toolbar" onSubmit={loadPrices} onKeyDown={commitInputOnEnter}>
         <StockSearch label="Company" stocks={stocks} value={ticker} onSelect={changeCompany} />
 
         <label>

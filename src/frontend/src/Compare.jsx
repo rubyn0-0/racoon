@@ -12,6 +12,7 @@ import {
   baseYAxis,
   changeClass,
   chf,
+  commitInputOnEnter,
   displayDate,
   frequencyById,
   intervalById,
@@ -137,7 +138,9 @@ function CompareTable({ result }) {
 
 // The date range every stock of the chosen portfolios has prices for.
 function commonRange(stocks, portfolios) {
-  const tickers = new Set(portfolios.flatMap((portfolio) => portfolio.holdings.map((holding) => holding.ticker)))
+  const tickers = new Set(portfolios.flatMap((portfolio) => portfolio.holdings
+    .filter((holding) => holding.selected !== false)
+    .map((holding) => holding.ticker)))
   const held = stocks.filter((stock) => tickers.has(stock.ticker) && stock.start_date)
   if (held.length === 0) return { start: '', end: '' }
 
@@ -189,7 +192,9 @@ function Compare({ portfolios, stocks, onStocksChanged }) {
     try {
       // Nothing is loaded before this press: the stocks of every chosen portfolio are fetched now.
       await waitForStocks(
-        [...new Set(chosen.flatMap((portfolio) => portfolio.holdings.map((holding) => holding.ticker)))],
+        [...new Set(chosen.flatMap((portfolio) => portfolio.holdings
+          .filter((holding) => holding.selected !== false)
+          .map((holding) => holding.ticker)))],
         setProgress,
       )
       onStocksChanged()
@@ -211,7 +216,7 @@ function Compare({ portfolios, stocks, onStocksChanged }) {
         see comes from the strategy.
       </p>
 
-      <form className="portfolio-form" onSubmit={run}>
+      <form className="portfolio-form" onSubmit={run} onKeyDown={commitInputOnEnter}>
         <fieldset className="rules">
           <legend>Portfolios ({MIN_COMPARE} to {MAX_COMPARE})</legend>
           {portfolios.map((portfolio) => (

@@ -119,6 +119,8 @@ def test_inflow_arrives_on_the_last_trading_day_of_each_period():
     result = backtest(closes, no_dividends(closes), half_half(), initial=1000, inflow=100)
 
     assert [row["invested"] for row in result["series"]] == [1000, 1100, 1200, 1200]
+    assert result["summary"]["initial_invested"] == pytest.approx(1000)
+    assert result["summary"]["periodic_invested"] == pytest.approx(200)
 
 
 def test_dividend_cash_waits_for_the_investing_day():
@@ -133,6 +135,13 @@ def test_dividend_cash_waits_for_the_investing_day():
 
     # 100 shares x 1 CHF, held as cash until the month ends, then 10 more whole shares.
     assert [row["cash"] for row in result["series"]] == [0, 100, 0, 0]
+    assert [row["dividends"] for row in result["series"]] == [0, 100, 100, 100]
+    assert [row["latest_dividend_date"] for row in result["series"]] == [None, "2025-01-03", "2025-01-03", "2025-01-03"]
+    assert result["series"][1]["latest_dividend_payout"] == pytest.approx(100)
+    assert result["series"][1]["dividend_year"] == "2025"
+    assert result["series"][1]["annual_dividends"] == pytest.approx(100)
+    assert result["series"][1]["annual_dividend_return"] == pytest.approx(100 / 1100)
+    assert result["series"][1]["dividend_year_closing_value"] == pytest.approx(1100)
     assert result["summary"]["dividends"] == pytest.approx(100)
     assert result["holdings"][0]["shares"] == 110
 
@@ -148,6 +157,30 @@ def test_immediate_reinvests_the_same_day_and_never_keeps_cash():
     assert immediate["holdings"][0]["shares"] == 110
     assert kept["summary"]["cash"] == pytest.approx(100)
     assert kept["summary"]["final_value"] == pytest.approx(1100)
+
+
+def test_dividend_return_uses_each_calendar_years_closing_value():
+    closes = prices(
+        [("2024-01-02", 10), ("2024-06-03", 10), ("2025-01-02", 10)],
+        tickers=("A",),
+    )
+    dividends = prices(
+        [("2024-01-02", 0.0), ("2024-06-03", 1.0), ("2025-01-02", 2.0)],
+        tickers=("A",),
+    )
+
+    series = backtest(
+        closes,
+        dividends,
+        fixed_rule({"A": 1.0}),
+        initial=1000,
+        invest_frequency=NEVER,
+    )["series"]
+
+    assert series[0]["annual_dividends"] == pytest.approx(100)
+    assert series[0]["annual_dividend_return"] == pytest.approx(100 / 1100)
+    assert series[2]["annual_dividends"] == pytest.approx(200)
+    assert series[2]["annual_dividend_return"] == pytest.approx(200 / 1300)
 
 
 def test_inflow_waits_for_the_quarter_when_investing_quarterly():
@@ -201,6 +234,27 @@ def test_max_drawdown():
     summary = backtest(closes, no_dividends(closes), fixed_rule({"A": 1.0}), initial=100)["summary"]
 
     assert summary["max_drawdown"] == pytest.approx(-0.5)
+    assert summary["max_drawdown_start"] == "2025-01-02"
+    assert summary["max_drawdown_end"] == "2025-01-03"
+    assert summary["max_absolute_drawdown"] == pytest.approx(50)
+    assert summary["max_absolute_drawdown_start"] == "2025-01-02"
+    assert summary["max_absolute_drawdown_end"] == "2025-01-03"
+
+
+def test_largest_relative_and_absolute_drawdowns_can_be_different():
+    closes = prices(
+        [("2025-01-02", 10), ("2025-01-03", 5), ("2025-01-06", 50), ("2025-01-07", 40)],
+        tickers=("A",),
+    )
+
+    summary = backtest(closes, no_dividends(closes), fixed_rule({"A": 1.0}), initial=100)["summary"]
+
+    assert summary["max_drawdown"] == pytest.approx(-0.5)
+    assert summary["max_drawdown_start"] == "2025-01-02"
+    assert summary["max_drawdown_end"] == "2025-01-03"
+    assert summary["max_absolute_drawdown"] == pytest.approx(100)
+    assert summary["max_absolute_drawdown_start"] == "2025-01-06"
+    assert summary["max_absolute_drawdown_end"] == "2025-01-07"
 
 
 def test_plan_lists_the_next_investments_at_flat_prices():

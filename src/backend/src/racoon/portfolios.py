@@ -41,7 +41,8 @@ DEFAULT_PLAN_DAYS = 366
 class HoldingIn(BaseModel):
     ticker: str
     weight: float | None = Field(default=None, gt=0, description="Only used with manual weighting")
-    start_shares: float | None = Field(default=None, ge=0, description="Shares held on the portfolio's start date")
+    start_shares: float | None = Field(default=None, ge=0, description="Shares transferred when the portfolio opens")
+    selected: bool = Field(default=True, description="Whether this available stock is active in the portfolio")
 
 
 class WeightsIn(BaseModel):
@@ -54,7 +55,7 @@ class PortfolioIn(WeightsIn):
     invest_frequency: Literal[INVEST_FREQUENCIES] = MONTHLY
     inflow_amount: float = Field(default=0, ge=0, description=f"{CURRENCY} of new money per inflow period")
     inflow_frequency: Literal[INFLOW_FREQUENCIES] = MONTHLY
-    start_date: date | None = Field(default=None, description="Start of the starting position, if there is one")
+    start_date: date | None = Field(default=None, description="Optional portfolio opening date")
     initial_capital: float = Field(default=0, ge=0, description=f"{CURRENCY} invested on the first day")
 
 
@@ -65,9 +66,13 @@ def resolve_holdings(conn, weighting, holdings, strict=True):
     failing, so saved portfolios can still be listed before their stocks have been opened.
     """
     tickers = [holding["ticker"] for holding in holdings]
+    selected = [holding for holding in holdings if holding.get("selected", True)]
+    selected_tickers = [holding["ticker"] for holding in selected]
     if len(set(tickers)) != len(tickers):
         raise HTTPException(status_code=422, detail="Each stock can only be added once.")
-    if weighting == MANUAL and any(holding["weight"] is None for holding in holdings):
+    if not selected:
+        raise HTTPException(status_code=422, detail="Select at least one stock.")
+    if weighting == MANUAL and any(holding["weight"] is None for holding in selected):
         raise HTTPException(status_code=422, detail="Give every stock a weight, or pick another weighting.")
 
     rows = conn.execute(
@@ -82,8 +87,8 @@ def resolve_holdings(conn, weighting, holdings, strict=True):
 
     sizes = None
     if weighting == MARKET_CAP:
-        sizes = {ticker: companies[ticker]["market_cap"] for ticker in tickers}
-        missing = [companies[ticker]["name"] for ticker in tickers if not sizes[ticker]]
+        sizes = {ticker: companies[ticker]["market_cap"] for ticker in selected_tickers}
+        missing = [companies[ticker]["name"] for ticker in selected_tickers if not sizes[ticker]]
         if missing and strict:
             raise HTTPException(
                 status_code=422,
@@ -92,19 +97,20 @@ def resolve_holdings(conn, weighting, holdings, strict=True):
         if missing:
             sizes = None
     elif weighting == OWNERSHIP:
-        sizes = ownership_sizes(conn, tickers, companies, strict)
+        sizes = ownership_sizes(conn, selected_tickers, companies, strict)
 
     if sizes is None and weighting in (MARKET_CAP, OWNERSHIP):
-        weights = dict.fromkeys(tickers)
+        weights = dict.fromkeys(selected_tickers)
     else:
-        weights = target_weights(holdings, weighting, sizes)
+        weights = target_weights(selected, weighting, sizes)
     return [
         {
             "ticker": holding["ticker"],
             "company": companies[holding["ticker"]]["name"],
-            "weight": holding["weight"] if weighting == MANUAL else None,
+            "selected": holding.get("selected", True),
+            "weight": holding["weight"] if weighting == MANUAL and holding.get("selected", True) else None,
             "start_shares": holding.get("start_shares"),
-            "target_weight": weights[holding["ticker"]],
+            "target_weight": weights.get(holding["ticker"]),
         }
         for holding in holdings
     ]
@@ -151,7 +157,7 @@ def load_portfolio(conn, portfolio_id):
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
     holdings = conn.execute(
-        text("SELECT ticker, weight, start_shares FROM holdings WHERE portfolio_id = :id ORDER BY ticker"),
+        text("SELECT ticker, weight, start_shares, selected FROM holdings WHERE portfolio_id = :id ORDER BY ticker"),
         {"id": portfolio_id},
     ).mappings().all()
 
@@ -161,8 +167,22 @@ def load_portfolio(conn, portfolio_id):
     }
 
 
+def selected_holdings(portfolio):
+    """The available stocks currently enabled for weighting, simulation and comparison."""
+    return [holding for holding in portfolio["holdings"] if holding.get("selected", True)]
+
+
+def backtest_holdings(portfolio):
+    """Strategy stocks plus any unselected stocks with transferred shares."""
+    return [
+        holding
+        for holding in portfolio["holdings"]
+        if holding.get("selected", True) or (holding.get("start_shares") or 0) > 0
+    ]
+
+
 def rule_params(body):
-    """The portfolio columns a request sets; a starting position only counts with a start date."""
+    """The portfolio rule columns set by a create or update request."""
     return {
         "name": body.name.strip(),
         "weighting": body.weighting,
@@ -178,15 +198,17 @@ def save_holdings(conn, portfolio_id, body):
     conn.execute(text("DELETE FROM holdings WHERE portfolio_id = :id"), {"id": portfolio_id})
     conn.execute(
         text("""
-            INSERT INTO holdings (portfolio_id, ticker, weight, start_shares)
-            VALUES (:id, :ticker, :weight, :start_shares)
+            INSERT INTO holdings (portfolio_id, ticker, weight, start_shares, selected)
+            VALUES (:id, :ticker, :weight, :start_shares, :selected)
         """),
         [
             {
                 "id": portfolio_id,
                 "ticker": holding.ticker,
-                "weight": holding.weight if body.weighting == MANUAL else None,
-                "start_shares": (holding.start_shares or 0) if body.start_date else None,
+                "weight": holding.weight if body.weighting == MANUAL and holding.selected else None,
+                # Starting positions are tracked independently of investment-strategy selection.
+                "start_shares": holding.start_shares,
+                "selected": holding.selected,
             }
             for holding in body.holdings
         ],
@@ -260,7 +282,7 @@ def compare_portfolios(
 
     # The prices of every stock involved come from one query, then each portfolio takes its columns.
     portfolios = [load_portfolio(conn, portfolio_id) for portfolio_id in portfolio_ids]
-    tickers = sorted({holding["ticker"] for portfolio in portfolios for holding in portfolio["holdings"]})
+    tickers = sorted({holding["ticker"] for portfolio in portfolios for holding in selected_holdings(portfolio)})
     raw_closes, raw_dividends = fetch_prices(conn, tickers, start)
 
     shared = {"initial": initial, "inflow": inflow, "inflow_frequency": inflow_frequency}
@@ -394,25 +416,42 @@ def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, sha
     `shared` ({initial, inflow, inflow_frequency}) replaces the portfolio's own starting capital and new
     money and drops its starting position, so several portfolios can be run with the same money.
     """
-    tickers = [holding["ticker"] for holding in portfolio["holdings"]]
-    weights = {holding["ticker"]: holding["target_weight"] for holding in portfolio["holdings"]}
+    strategy_holdings = selected_holdings(portfolio)
+    holdings = strategy_holdings if shared else backtest_holdings(portfolio)
+    tickers = [holding["ticker"] for holding in holdings]
+    strategy_tickers = {holding["ticker"] for holding in strategy_holdings}
+    weights = {
+        holding["ticker"]: holding["target_weight"] if holding["ticker"] in strategy_tickers else 0.0
+        for holding in holdings
+    }
     if any(weight is None for weight in weights.values()):
         raise HTTPException(
             status_code=409,
             detail="Company sizes for this portfolio are still loading. Try again in a moment.",
         )
-    companies = {holding["ticker"]: holding["company"] for holding in portfolio["holdings"]}
+    companies = {holding["ticker"]: holding["company"] for holding in holdings}
+    stored_starts = dict(
+        conn.execute(
+            text("SELECT ticker, price_start FROM companies WHERE ticker = ANY(:tickers)"),
+            {"tickers": tickers},
+        ).all()
+    )
 
     # Days where only some stocks traded carry the last close forward, and the test starts on the first
     # day every stock has a price.
     wanted = raw_closes[tickers]
-    first_days = wanted.apply(pd.Series.first_valid_index)
+    observed_starts = wanted.apply(pd.Series.first_valid_index)
+    first_days = pd.Series({
+        ticker: stored_starts[ticker].isoformat() if stored_starts.get(ticker) else observed_starts[ticker]
+        for ticker in tickers
+    })
     closes = wanted.ffill().dropna()
-    start_date = None if shared else portfolio["start_date"]
-    if start_date:
-        closes = closes[closes.index >= start_date]
-    elif start:
-        closes = closes[closes.index >= start.isoformat()]
+    portfolio_start = None if shared else portfolio["start_date"]
+    # A custom backtest start is a hypothetical new opening date. Without one, use the
+    # saved opening date; if both are blank, the common price history decides the start.
+    effective_start = start.isoformat() if start else portfolio_start
+    if effective_start:
+        closes = closes[closes.index >= effective_start]
     if end:
         closes = closes[closes.index <= end.isoformat()]
     if closes.empty:
@@ -421,7 +460,7 @@ def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, sha
     dividends = raw_dividends[tickers].reindex(closes.index).fillna(0.0)
 
     limited_by = None
-    limiting = limiting_stock(first_days, start.isoformat() if start else None)
+    limiting = limiting_stock(first_days, effective_start)
     if limiting:
         ticker, listed = limiting
         limited_by = {"ticker": ticker, "company": companies[ticker], "date": listed}
@@ -433,7 +472,9 @@ def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, sha
                 {"tickers": tickers},
             ).all()
         )
-        rule = ownership_rule(portfolio["holdings"], shares_outstanding)
+        strategy_rule = ownership_rule(strategy_holdings, shares_outstanding)
+        position_only = set(tickers) - strategy_tickers
+        rule = lambda prices: {**strategy_rule(prices), **dict.fromkeys(position_only, 0.0)}
     else:
         rule = fixed_rule(weights)
 
@@ -443,21 +484,26 @@ def build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end, sha
         "inflow_frequency": shared["inflow_frequency"] if shared else portfolio["inflow_frequency"],
         "invest_frequency": portfolio["invest_frequency"],
     }
-    if start_date:
-        rules["start_shares"] = {holding["ticker"]: holding["start_shares"] or 0 for holding in portfolio["holdings"]}
+    if not shared and any(holding["start_shares"] is not None for holding in holdings):
+        rules["start_shares"] = {holding["ticker"]: holding["start_shares"] or 0 for holding in holdings}
 
     return Simulation(portfolio, closes, dividends, rule, rules, limited_by)
 
 
 def load_simulation(conn, portfolio_id, start, end):
     portfolio = load_portfolio(conn, portfolio_id)
-    since = date.fromisoformat(portfolio["start_date"]) if portfolio["start_date"] else start
-    raw_closes, raw_dividends = fetch_prices(conn, [holding["ticker"] for holding in portfolio["holdings"]], since)
+    # A custom range overrides the saved opening date, including when it starts earlier.
+    since = start or (date.fromisoformat(portfolio["start_date"]) if portfolio["start_date"] else None)
+    raw_closes, raw_dividends = fetch_prices(
+        conn,
+        [holding["ticker"] for holding in backtest_holdings(portfolio)],
+        since,
+    )
     return build_simulation(conn, portfolio, raw_closes, raw_dividends, start, end)
 
 
 def name_buys(portfolio, investments):
-    companies = {holding["ticker"]: holding["company"] for holding in portfolio["holdings"]}
+    companies = {holding["ticker"]: holding["company"] for holding in backtest_holdings(portfolio)}
     for item in investments:
         for buy in item["buys"]:
             buy["company"] = companies[buy["ticker"]]
@@ -474,11 +520,13 @@ def run_backtest(
     simulation = load_simulation(conn, portfolio_id, start, end)
     portfolio, rules = simulation.portfolio, simulation.rules
 
-    if not portfolio["start_date"] and rules["initial"] + rules["inflow"] <= 0:
+    holdings = backtest_holdings(portfolio)
+    has_starting_shares = any((holding["start_shares"] or 0) > 0 for holding in holdings)
+    if not has_starting_shares and rules["initial"] + rules["inflow"] <= 0:
         raise HTTPException(status_code=422, detail="Invest a starting amount, new money, or both.")
 
     result = backtest(simulation.closes, simulation.dividends, simulation.rule, **rules)
-    companies = {holding["ticker"]: holding["company"] for holding in portfolio["holdings"]}
+    companies = {holding["ticker"]: holding["company"] for holding in holdings}
     for holding in result["holdings"]:
         holding["company"] = companies[holding["ticker"]]
     name_buys(portfolio, result["investments"])
@@ -488,6 +536,9 @@ def run_backtest(
         "settings": {
             "initial_capital": rules["initial"],
             "start_date": portfolio["start_date"],
+            "has_starting_position": any(
+                (holding["start_shares"] or 0) > 0 for holding in holdings
+            ),
             "invest_frequency": portfolio["invest_frequency"],
             "inflow_amount": portfolio["inflow_amount"],
             "inflow_frequency": portfolio["inflow_frequency"],

@@ -41,6 +41,11 @@ def test_the_last_listed_stock_limits_the_test():
 
     assert limiting_stock(first_days) == ("B", "2019-04-09")
     assert limiting_stock(first_days, "2000-01-01") == ("B", "2019-04-09")
+    assert limiting_stock(first_days, "2019-04-09") is None
     # Starting after the youngest listing: nothing is cut short.
     assert limiting_stock(first_days, "2020-01-01") is None
     assert limiting_stock(pd.Series({"A": "2000-01-03", "B": "2000-01-03"})) is None
+    assert limiting_stock(pd.Series({"A": "2000-01-03", "B": "2000-01-03"}), "1999-01-01") == (
+        "A",
+        "2000-01-03",
+    )

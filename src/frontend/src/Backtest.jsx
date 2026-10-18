@@ -2,9 +2,10 @@
 // plus an optional plan of what to buy next. How money flows (inflow, investing frequency) is set on the
 // portfolio itself in Portfolios.jsx. Defaults, chart sizes and the currency are in settings.js.
 import Plot from 'react-plotly.js'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchBacktest, fetchPlan } from './api'
 import {
+  EditableDateField,
   LimitNote,
   OptionButtons,
   baseLayout,
@@ -12,23 +13,31 @@ import {
   baseYAxis,
   changeClass,
   chf,
+  commitInputOnEnter,
+  dateOnly,
   daysBetween,
   displayDate,
+  editableDateValue,
   frequencyById,
   intervalById,
   legend,
   margin,
   percent,
+  parseEditableDate,
   plotConfig,
   plotStyle,
   signedPercent,
   waitForStocks,
 } from './helpers'
 import {
+  AXIS_HEADROOM,
   BACKTEST_HEIGHT,
   BACKTEST_LEGEND_Y,
   BACKTEST_MARGIN_LEFT,
   BACKTEST_MARGIN_RIGHT,
+  BACKTEST_HIGHLIGHT_OPACITY,
+  BACKTEST_PAID_FILL_OPACITY,
+  BACKTEST_RETURN_FILL_OPACITY,
   CHART_FONT_SIZE,
   CURRENCY,
   DAILY_INTERVAL,
@@ -54,15 +63,124 @@ function endLabel(series, key, text, color) {
   }
 }
 
-function BacktestChart({ series, plan }) {
+function BacktestChart({ series, plan, feature, summary }) {
   const x = series.map((row) => row.date)
-  const plannedDays = plan
-    ? [...new Set([plan.next_investing_date, ...plan.investments.map((item) => item.date)].filter(Boolean))]
-    : []
+  const dataStart = series[0].date
+  const dataEnd = series[series.length - 1].date
+  const chartEnd = plan?.until ?? dataEnd
+  const [visibleRange, setVisibleRange] = useState([dataStart, chartEnd])
+  const plannedDays = plan?.next_investing_date ? [plan.next_investing_date] : []
+  const paidIn = series.map((row) => row.invested)
+  const startingValue = series.map(() => summary.initial_invested)
+  const paidInTraces = feature === 'paid-in' ? [
+    {
+      type: 'scatter', mode: 'lines', x, y: series.map(() => 0),
+      line: { width: 0 }, hoverinfo: 'skip', showlegend: false,
+    },
+    {
+      type: 'scatter', mode: 'lines', x, y: startingValue,
+      line: { width: 0 }, fill: 'tonexty', fillcolor: theme.invested, opacity: BACKTEST_PAID_FILL_OPACITY,
+      hoverinfo: 'skip', showlegend: false,
+    },
+    {
+      type: 'scatter', mode: 'lines', x, y: startingValue,
+      line: { width: 0 }, hoverinfo: 'skip', showlegend: false,
+    },
+    {
+      type: 'scatter', mode: 'lines', x, y: paidIn,
+      line: { width: 0 }, fill: 'tonexty', fillcolor: theme.periodic, opacity: BACKTEST_PAID_FILL_OPACITY,
+      hoverinfo: 'skip', showlegend: false,
+    },
+  ] : []
+  const marketReturnTraces = feature === 'market-return' ? [
+    {
+      type: 'scatter', mode: 'lines', x, y: paidIn,
+      line: { width: 0 }, hoverinfo: 'skip', showlegend: false,
+    },
+    {
+      type: 'scatter', mode: 'lines', x,
+      y: series.map((row) => Math.max(row.value, row.invested)),
+      line: { width: 0 }, fill: 'tonexty', fillcolor: theme.up, opacity: BACKTEST_RETURN_FILL_OPACITY,
+      hoverinfo: 'skip', showlegend: false,
+    },
+    {
+      type: 'scatter', mode: 'lines', x, y: paidIn,
+      line: { width: 0 }, hoverinfo: 'skip', showlegend: false,
+    },
+    {
+      type: 'scatter', mode: 'lines', x,
+      y: series.map((row) => Math.min(row.value, row.invested)),
+      line: { width: 0 }, fill: 'tonexty', fillcolor: theme.down, opacity: BACKTEST_RETURN_FILL_OPACITY,
+      hoverinfo: 'skip', showlegend: false,
+    },
+  ] : []
+  const relativeDrop = { start: summary.max_drawdown_start, end: summary.max_drawdown_end }
+  const absoluteDrop = { start: summary.max_absolute_drawdown_start, end: summary.max_absolute_drawdown_end }
+  const distinctDrops = relativeDrop.start !== absoluteDrop.start || relativeDrop.end !== absoluteDrop.end
+
+  function dropTraces(drop, name, color, dash = 'solid') {
+    if (feature !== 'drawdown' || !drop.start) return []
+    const values = series.map((row) => (
+      row.date >= drop.start && row.date <= drop.end ? row.value : null
+    ))
+
+    return [{
+      type: 'scatter',
+      mode: 'lines',
+      name,
+      x,
+      y: values,
+      line: { color, width: LINE_WIDTH * 2, dash },
+      opacity: BACKTEST_HIGHLIGHT_OPACITY,
+      hovertemplate: `${CURRENCY} %{y:,.0f}<extra>${name}</extra>`,
+    }, {
+      type: 'scatter',
+      mode: 'markers',
+      name: `${name} endpoints`,
+      x: [drop.start, drop.end],
+      y: [
+        series.find((row) => row.date === drop.start)?.value,
+        series.find((row) => row.date === drop.end)?.value,
+      ],
+      marker: { color, size: 7 },
+      opacity: BACKTEST_HIGHLIGHT_OPACITY,
+      hovertemplate: `${CURRENCY} %{y:,.0f}<extra>${name}</extra>`,
+      showlegend: false,
+    }]
+  }
+
+  const drawdownTraces = [
+    ...dropTraces(relativeDrop, distinctDrops ? 'Largest percentage drop' : 'Largest drop (% and CHF)', theme.down),
+    ...(distinctDrops ? dropTraces(absoluteDrop, 'Largest CHF drop', theme.invested) : []),
+  ]
+
+  const visibleStart = dateOnly(visibleRange[0])
+  const visibleEnd = dateOnly(visibleRange[1])
+  const rowsInView = series.filter((row) => row.date >= visibleStart && row.date <= visibleEnd)
+  const fittedRows = rowsInView.length > 0 ? rowsInView : series
+  const fittedValues = fittedRows.flatMap((row) => [row.value, row.invested])
+  const fittedMaximum = Math.max(...fittedValues)
+  const yRange = [0, fittedMaximum * (1 + AXIS_HEADROOM)]
+
+  function updateVisibleRange(event) {
+    const nextStart = event['xaxis.range[0]']
+    const nextEnd = event['xaxis.range[1]']
+
+    if (nextStart && nextEnd) {
+      setVisibleRange([
+        new Date(nextStart) < new Date(dataStart) ? dataStart : nextStart,
+        new Date(nextEnd) > new Date(chartEnd) ? chartEnd : nextEnd,
+      ])
+    } else if (event['xaxis.autorange']) {
+      setVisibleRange([dataStart, chartEnd])
+    }
+  }
 
   return (
     <Plot
       data={[
+        ...paidInTraces,
+        ...marketReturnTraces,
         {
           type: 'scatter',
           mode: 'lines',
@@ -70,18 +188,39 @@ function BacktestChart({ series, plan }) {
           x,
           y: series.map((row) => row.value),
           line: { color: theme.value, width: LINE_WIDTH },
-          hovertemplate: `${CURRENCY} %{y:,.0f}<extra>Portfolio value</extra>`,
+          hovertemplate: feature === 'dividends' ? undefined : `${CURRENCY} %{y:,.0f}<extra>Portfolio value</extra>`,
+          hoverinfo: feature === 'dividends' ? 'skip' : undefined,
         },
         {
           type: 'scatter',
           mode: 'lines',
           name: 'Money paid in',
           x,
-          y: series.map((row) => row.invested),
+          y: paidIn,
           // Contributions arrive in steps, so draw them as steps.
           line: { color: theme.invested, width: LINE_WIDTH, shape: 'hv' },
-          hovertemplate: `${CURRENCY} %{y:,.0f}<extra>Money paid in</extra>`,
+          hovertemplate: feature === 'dividends' ? undefined : `${CURRENCY} %{y:,.0f}<extra>Money paid in</extra>`,
+          hoverinfo: feature === 'dividends' ? 'skip' : undefined,
         },
+        ...(feature === 'dividends' ? [{
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Dividends accumulated',
+          x,
+          y: series.map((row) => row.dividends),
+          customdata: series.map((row) => [
+            row.latest_dividend_date
+              ? `${chf(row.latest_dividend_payout)} on ${displayDate(row.latest_dividend_date)}`
+              : 'No payout yet',
+            row.dividend_year,
+            percent(row.annual_dividend_return, 2),
+            chf(row.annual_dividends),
+          ]),
+          line: { color: theme.up, width: LINE_WIDTH, shape: 'hv' },
+          opacity: BACKTEST_HIGHLIGHT_OPACITY,
+          hovertemplate: `${CURRENCY} %{y:,.0f} accumulated<br>Latest payout: %{customdata[0]}<br>%{customdata[1]} dividend return: %{customdata[2]} <span style="color:${theme.muted}">(%{customdata[3]})</span><extra>Dividends</extra>`,
+        }] : []),
+        ...drawdownTraces,
         // An empty trace so the planned days get a legend entry.
         ...(plan ? [{
           type: 'scatter',
@@ -101,12 +240,15 @@ function BacktestChart({ series, plan }) {
         legend: legend(BACKTEST_LEGEND_Y),
         xaxis: {
           ...baseXAxis,
+          range: visibleRange,
+          minallowed: dataStart,
+          maxallowed: chartEnd,
           hoverformat: intervalById[DAILY_INTERVAL].hoverFormat,
-          ...(plan && { range: [series[0].date, plan.until] }),
         },
         yaxis: {
           ...baseYAxis,
-          rangemode: 'tozero',
+          range: yRange,
+          minallowed: 0,
           tickprefix: `${CURRENCY} `,
           tickformat: ',.0f',
           fixedrange: true,
@@ -128,11 +270,12 @@ function BacktestChart({ series, plan }) {
       }}
       config={plotConfig}
       style={plotStyle}
+      onRelayout={updateVisibleRange}
     />
   )
 }
 
-// The plan: how close the next investing day is, and what will be bought on each planned day.
+// The plan: how close the next investing day is, and what will be bought then.
 function PlanPanel({ plan, firstDate }) {
   if (plan.invest_frequency === NEVER_INVEST) {
     return (
@@ -166,7 +309,7 @@ function PlanPanel({ plan, firstDate }) {
       </div>
 
       {plan.investments.length === 0 ? (
-        <p className="muted">Nothing to buy before {displayDate(plan.until)}.</p>
+        <p className="muted">Nothing to buy on {displayDate(plan.next_investing_date)}.</p>
       ) : (
         <div className="table-scroll">
           <table className="holdings-table">
@@ -195,50 +338,66 @@ function PlanPanel({ plan, firstDate }) {
   )
 }
 
-// The panel: settings form, then the result below it.
-// The backtest can only start once every holding has prices, and end when the first one stops.
-function commonRange(stocks, portfolio) {
-  const held = stocks.filter(
-    (stock) => stock.start_date && portfolio.holdings.some((holding) => holding.ticker === stock.ticker),
-  )
-  if (held.length === 0) return { start: '', end: '' }
-
-  return {
-    start: held.reduce((latest, stock) => (stock.start_date > latest ? stock.start_date : latest), held[0].start_date),
-    end: held.reduce((earliest, stock) => (stock.end_date < earliest ? stock.end_date : earliest), held[0].end_date),
-  }
-}
-
-function Tile({ label, value, note }) {
+function Tile({ label, value, note, feature, active, onPreview, onToggle }) {
   return (
-    <div className="tile">
+    <button
+      type="button"
+      className={active ? 'tile interactive active' : 'tile interactive'}
+      aria-pressed={active}
+      onMouseEnter={() => onPreview(feature)}
+      onMouseLeave={() => onPreview(null)}
+      onFocus={() => onPreview(feature)}
+      onBlur={() => onPreview(null)}
+      onClick={() => onToggle(feature)}
+    >
       <span className="tile-label">{label}</span>
       <span className="tile-value">{value}</span>
       {note && <span className="tile-note">{note}</span>}
-    </div>
+    </button>
   )
 }
 
 function ShareBar({ summary }) {
   if (summary.gain < 0) {
     return (
-      <p className="muted">
-        The portfolio is worth {chf(-summary.gain)} less than the money you paid in, so all of its value is your own money.
-      </p>
+      <div className="share-split">
+        <p className="share-split-title">Where today&apos;s value comes from</p>
+        <p className="muted">
+          The portfolio is worth {chf(-summary.gain)} less than the money paid in: {chf(summary.initial_invested)} at the
+          start{summary.periodic_invested > 0 && ` and ${chf(summary.periodic_invested)} added periodically`}.
+        </p>
+        {summary.cash > 0 && (
+          <p className="share-split-note">{chf(summary.cash)} of today&apos;s value is currently waiting as cash.</p>
+        )}
+      </div>
     )
   }
+
+  const sources = [
+    { key: 'initial', label: 'Starting value', value: summary.initial_invested, className: 'initial' },
+    { key: 'periodic', label: 'Periodic contributions', value: summary.periodic_invested, className: 'periodic' },
+    { key: 'return', label: 'Market return', value: summary.gain, className: 'return' },
+  ].filter((source) => source.value > 0)
 
   return (
     <div className="share-split">
       <p className="share-split-title">Where today&apos;s value comes from</p>
       <div className="split-bar" aria-hidden="true">
-        <span className="split-own" style={{ width: percent(summary.new_money_share) }} />
-        <span className="split-return" style={{ width: percent(summary.returned_share) }} />
+        {sources.map((source) => (
+          <span key={source.key} className={`split-${source.className}`} style={{ width: percent(source.value / summary.final_value) }} />
+        ))}
       </div>
       <ul className="split-legend">
-        <li><span className="swatch own" />Your money {percent(summary.new_money_share)} ({chf(summary.invested)})</li>
-        <li><span className="swatch return" />Market return {percent(summary.returned_share)} ({chf(summary.gain)})</li>
+        {sources.map((source) => (
+          <li key={source.key}>
+            <span className={`swatch ${source.className}`} />
+            {source.label} {percent(source.value / summary.final_value)} ({chf(source.value)})
+          </li>
+        ))}
       </ul>
+      {summary.cash > 0 && (
+        <p className="share-split-note">{chf(summary.cash)} of today&apos;s value is currently waiting as cash.</p>
+      )}
     </div>
   )
 }
@@ -246,7 +405,7 @@ function ShareBar({ summary }) {
 // One sentence on how the money got in, from the portfolio's rules.
 function paidInNote(settings) {
   const capital = `${chf(settings.initial_capital)} starting capital`
-  const start = settings.start_date ? `${capital} and shares you owned` : capital
+  const start = settings.has_starting_position ? `${capital} and shares you owned` : capital
   if (!settings.inflow_amount) return start
   return `${start}, then ${chf(settings.inflow_amount)} ${frequencyById[settings.inflow_frequency].per}`
 }
@@ -258,6 +417,24 @@ function dividendsNote(settings) {
 
 function BacktestResult({ result, plan }) {
   const { summary, settings, holdings, series } = result
+  const [previewFeature, setPreviewFeature] = useState(null)
+  const [pinnedFeature, setPinnedFeature] = useState(null)
+  const activeFeature = previewFeature ?? pinnedFeature
+  const distinctDrawdowns = (
+    summary.max_drawdown_start !== summary.max_absolute_drawdown_start
+    || summary.max_drawdown_end !== summary.max_absolute_drawdown_end
+  )
+  const drawdownValues = (
+    <>
+      <span>{percent(summary.max_drawdown)} relative</span>
+      <span>−{chf(summary.max_absolute_drawdown)} absolute</span>
+    </>
+  )
+
+  function toggleFeature(feature) {
+    setPreviewFeature(null)
+    setPinnedFeature((current) => (current === feature ? null : feature))
+  }
 
   return (
     <div className="backtest-result">
@@ -273,16 +450,21 @@ function BacktestResult({ result, plan }) {
       <LimitNote limitedBy={result.limited_by} />
 
       <div className="tiles">
-        <Tile label="Paid in" value={chf(summary.invested)} note={paidInNote(settings)} />
-        <Tile label="Market return" value={chf(summary.gain)} note="Value minus the money paid in" />
-        <Tile label="Dividends" value={chf(summary.dividends)} note={dividendsNote(settings)} />
-        <Tile label="Cash waiting" value={chf(summary.cash)} note={`${summary.purchases} shares bought in total`} />
-        <Tile label="Largest drop" value={percent(summary.max_drawdown)} note="From a high to the lowest point after it" />
+        <Tile label="Paid in" value={chf(summary.invested)} note={paidInNote(settings)} feature="paid-in" active={activeFeature === 'paid-in'} onPreview={setPreviewFeature} onToggle={toggleFeature} />
+        <Tile label="Market return" value={chf(summary.gain)} note="Value minus the money paid in" feature="market-return" active={activeFeature === 'market-return'} onPreview={setPreviewFeature} onToggle={toggleFeature} />
+        <Tile label="Dividends" value={chf(summary.dividends)} note={dividendsNote(settings)} feature="dividends" active={activeFeature === 'dividends'} onPreview={setPreviewFeature} onToggle={toggleFeature} />
+        <Tile label="Largest drops" value={drawdownValues} note={distinctDrawdowns ? 'Different periods' : null} feature="drawdown" active={activeFeature === 'drawdown'} onPreview={setPreviewFeature} onToggle={toggleFeature} />
       </div>
 
       <ShareBar summary={summary} />
 
-      <BacktestChart series={series} plan={plan} />
+      <BacktestChart
+        key={`${summary.start_date}-${summary.end_date}-${plan?.until ?? ''}`}
+        series={series}
+        plan={plan}
+        feature={activeFeature}
+        summary={summary}
+      />
       {plan && <PlanPanel plan={plan} firstDate={series[0].date} />}
 
       <div className="table-scroll">
@@ -316,19 +498,26 @@ function BacktestResult({ result, plan }) {
 
 // The backtest panel. Nothing is loaded or run until you press Run backtest; that loads the portfolio's
 // stocks first (with a progress message) and then simulates.
-function BacktestPanel({ stocks, portfolio, onStocksChanged }) {
-  const tickers = portfolio.holdings.map((holding) => holding.ticker)
-  const range = commonRange(stocks, portfolio)
-  const [settings, setSettings] = useState({ start: '', end: '' })
+function BacktestPanel({ portfolio, onStocksChanged }) {
+  const tickers = portfolio.holdings
+    .filter((holding) => holding.selected !== false)
+    .map((holding) => holding.ticker)
+  const initialRange = { start: portfolio.start_date ?? '', end: '' }
+  const [customRange, setCustomRange] = useState({
+    start: editableDateValue(initialRange.start),
+    end: editableDateValue(initialRange.end),
+  })
   // The result together with the settings that produced it, so the plan matches the chart.
   const [run, setRun] = useState(null)
   const [error, setError] = useState('')
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(null)
+  const [showRange, setShowRange] = useState(false)
+  const [hasStoredCustomRange, setHasStoredCustomRange] = useState(false)
   const [showPlan, setShowPlan] = useState(false)
-  const [planUntil, setPlanUntil] = useState('')
   const [plan, setPlan] = useState(null)
   const [planError, setPlanError] = useState('')
+  const runSequence = useRef(0)
 
   // The plan follows the result on screen; it is fetched only while the plan is switched on.
   const ranSettings = run?.settings
@@ -336,45 +525,104 @@ function BacktestPanel({ stocks, portfolio, onStocksChanged }) {
     if (!showPlan || !ranSettings) return undefined
 
     let current = true
-    fetchPlan(portfolio.id, { start: ranSettings.start, until: planUntil })
+    fetchPlan(portfolio.id, { start: ranSettings.start, until: '' })
       .then((data) => {
         if (!current) return
-        setPlan(data)
+        const nextDate = data.next_investing_date
+        setPlan({
+          ...data,
+          until: nextDate ?? data.as_of,
+          investments: data.investments.filter((item) => item.date === nextDate).slice(0, 1),
+        })
         setPlanError('')
       })
       .catch((err) => current && setPlanError(err.message))
     return () => {
       current = false
     }
-  }, [showPlan, planUntil, portfolio.id, ranSettings])
+  }, [showPlan, portfolio.id, ranSettings])
 
   function update(field, value) {
-    setSettings((current) => ({ ...current, [field]: value }))
+    setCustomRange((current) => ({ ...current, [field]: value }))
   }
 
-  async function submit(event) {
-    event.preventDefault()
+  function parsedCustomRange(committed = {}) {
+    const start = committed.start !== undefined ? { date: committed.start, error: '' } : parseEditableDate(customRange.start)
+    const end = committed.end !== undefined ? { date: committed.end, error: '' } : parseEditableDate(customRange.end)
+    if (start.error) return { error: `From: ${start.error}` }
+    if (end.error) return { error: `To: ${end.error}` }
+    return { settings: { start: start.date ?? '', end: end.date ?? '' } }
+  }
 
+  async function runBacktest(settings) {
     if (settings.start && settings.end && settings.start > settings.end) {
       setError(START_BEFORE_END_ERROR)
       return
     }
 
+    const runId = ++runSequence.current
     setRunning(true)
     setError('')
     try {
-      await waitForStocks(tickers, setProgress)
+      await waitForStocks(tickers, (nextProgress) => {
+        if (runSequence.current === runId) setProgress(nextProgress)
+      })
+      if (runSequence.current !== runId) return
       onStocksChanged()
-      setRun({ result: await fetchBacktest(portfolio.id, settings), settings })
+      const result = await fetchBacktest(portfolio.id, settings)
+      if (runSequence.current === runId) setRun({ result, settings })
     } catch (err) {
-      setError(err.message)
+      if (runSequence.current === runId) setError(err.message)
     } finally {
-      setRunning(false)
-      setProgress(null)
+      if (runSequence.current === runId) {
+        setRunning(false)
+        setProgress(null)
+      }
     }
   }
 
-  const hasStartingPosition = Boolean(portfolio.start_date)
+  function commitCustomRange(field, date) {
+    const parsed = parsedCustomRange({ [field]: date })
+    if (parsed.error) {
+      setError(parsed.error)
+      return
+    }
+    setHasStoredCustomRange(true)
+    runBacktest(parsed.settings)
+  }
+
+  function toggleRange() {
+    if (!showRange) {
+      setShowRange(true)
+      if (hasStoredCustomRange) {
+        const parsed = parsedCustomRange()
+        if (!parsed.error) runBacktest(parsed.settings)
+      }
+      return
+    }
+
+    setShowRange(false)
+    setPlan(null)
+    setError('')
+    runBacktest(initialRange)
+  }
+
+  function submit(event) {
+    event.preventDefault()
+    if (!showRange) {
+      runBacktest(initialRange)
+      return
+    }
+
+    const parsed = parsedCustomRange()
+    if (parsed.error) {
+      setError(parsed.error)
+      return
+    }
+    setHasStoredCustomRange(true)
+    runBacktest(parsed.settings)
+  }
+
   const loading = progress && progress.done < progress.total
   const buttonText = !running ? 'Run backtest' : loading ? `Loading ${progress.done} of ${progress.total}…` : 'Running…'
 
@@ -386,32 +634,40 @@ function BacktestPanel({ stocks, portfolio, onStocksChanged }) {
         are spent on whole shares on the investing days. Nothing is ever sold.
       </p>
 
-      <form className="backtest-form" onSubmit={submit}>
-        {!hasStartingPosition && (
-          <label className="field">
-            From
-            <input type="date" value={settings.start} min={range.start || undefined} max={range.end || undefined} onChange={(event) => update('start', event.target.value)} />
-          </label>
-        )}
-        <label className="field">
-          To
-          <input type="date" value={settings.end} min={range.start || undefined} max={range.end || undefined} onChange={(event) => update('end', event.target.value)} />
-        </label>
+      <form className="backtest-form" onSubmit={submit} onKeyDown={commitInputOnEnter}>
+        <div className="backtest-run">
+          <button type="submit" className="primary" disabled={running}>{buttonText}</button>
+        </div>
         <div className="backtest-actions">
+          <OptionButtons
+            label="Range"
+            options={[{ id: 'range', label: 'Custom range' }]}
+            isActive={() => showRange}
+            onSelect={toggleRange}
+          />
           <OptionButtons
             label="Plan"
             options={[{ id: 'plan', label: 'Show plan' }]}
             isActive={() => showPlan}
             onSelect={() => setShowPlan((current) => !current)}
           />
-          {showPlan && (
-            <label className="field">
-              Look ahead to
-              <input type="date" value={planUntil} min={range.end || undefined} onChange={(event) => setPlanUntil(event.target.value)} />
-            </label>
-          )}
-          <button type="submit" className="primary" disabled={running}>{buttonText}</button>
         </div>
+        {showRange && (
+          <div className="backtest-range-fields">
+            <EditableDateField
+              label="From"
+              value={customRange.start}
+              onChange={(value) => update('start', value)}
+              onCommit={(date) => commitCustomRange('start', date)}
+            />
+            <EditableDateField
+              label="To (blank means today)"
+              value={customRange.end}
+              onChange={(value) => update('end', value)}
+              onCommit={(date) => commitCustomRange('end', date)}
+            />
+          </div>
+        )}
       </form>
 
       {!run && !running && !error && (

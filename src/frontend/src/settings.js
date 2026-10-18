@@ -14,6 +14,7 @@ const palette = {
   green: '#26c281',
   red: '#f0544a',
   amber: '#f0a30a',
+  copper: '#c9824b',
   errorBackground: '#3a1a18',
   errorText: '#ff9a92',
   buttonHover: '#c9d1d9',
@@ -37,6 +38,7 @@ export const theme = {
   // Backtest chart: portfolio value and money paid in.
   value: palette.blue,
   invested: palette.amber,
+  periodic: palette.copper,
   errorBackground: palette.errorBackground,
   errorText: palette.errorText,
   buttonHover: palette.buttonHover,
@@ -55,6 +57,7 @@ export const CSS_VARIABLES = {
   down: 'down',
   value: 'value',
   invested: 'invested',
+  periodic: 'periodic',
   'error-bg': 'errorBackground',
   'error-text': 'errorText',
   'button-hover': 'buttonHover',
@@ -68,6 +71,9 @@ export const MARGIN_BOTTOM = 40
 export const CHART_HEIGHT = 440
 export const VOLUME_HEIGHT = 100
 export const BACKTEST_HEIGHT = 360
+export const BACKTEST_RETURN_FILL_OPACITY = 0.035
+export const BACKTEST_PAID_FILL_OPACITY = 0.04
+export const BACKTEST_HIGHLIGHT_OPACITY = 0.72
 
 // Price chart.
 export const PRICE_MARGIN_LEFT = 56
@@ -139,7 +145,7 @@ export const LOCALE = 'de-CH'
 export const WEIGHTING = { EQUAL: 'equal', MARKET_CAP: 'market_cap', MANUAL: 'manual', OWNERSHIP: 'ownership' }
 export const WEIGHTINGS = [
   { id: WEIGHTING.EQUAL, label: 'Equal', name: 'Equal weight' },
-  { id: WEIGHTING.MARKET_CAP, label: 'Market cap (SMI style)', name: 'Market cap' },
+  { id: WEIGHTING.MARKET_CAP, label: 'Market cap', name: 'Market cap' },
   { id: WEIGHTING.MANUAL, label: 'Your weights', name: 'Your weights' },
   { id: WEIGHTING.OWNERSHIP, label: '% of company', name: 'Equal % of each company' },
 ]

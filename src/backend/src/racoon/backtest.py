@@ -166,8 +166,13 @@ def backtest(
     shares = np.array([float((start_shares or {}).get(ticker, 0)) for ticker in tickers])
     cash = float(initial)
     invested = float(shares @ price_rows[0]) + cash
+    initial_invested = invested
     dividends_paid = 0.0
-    peak = max_drawdown = 0.0
+    latest_dividend_date = None
+    latest_dividend_payout = 0.0
+    peak = max_drawdown = max_absolute_drawdown = 0.0
+    peak_date = max_drawdown_start = max_drawdown_end = None
+    max_absolute_drawdown_start = max_absolute_drawdown_end = None
     series, investments = [], []
 
     for index, date in enumerate(dates):
@@ -196,10 +201,53 @@ def backtest(
                 investments.append({"date": date, "cash_before": cash_before, "cash_after": cash, "buys": bought})
 
         value = float(shares @ prices + cash)
-        peak = max(peak, value)
+        if payout:
+            latest_dividend_date = date
+            latest_dividend_payout = payout
+        if value > peak:
+            peak = value
+            peak_date = date
         if peak:
-            max_drawdown = min(max_drawdown, value / peak - 1)
-        series.append({"date": date, "value": value, "invested": invested, "cash": cash})
+            drawdown = value / peak - 1
+            if drawdown < max_drawdown:
+                max_drawdown = drawdown
+                max_drawdown_start = peak_date
+                max_drawdown_end = date
+            absolute_drawdown = peak - value
+            if absolute_drawdown > max_absolute_drawdown:
+                max_absolute_drawdown = absolute_drawdown
+                max_absolute_drawdown_start = peak_date
+                max_absolute_drawdown_end = date
+        series.append({
+            "date": date,
+            "value": value,
+            "invested": invested,
+            "dividends": dividends_paid,
+            "latest_dividend_date": latest_dividend_date,
+            "latest_dividend_payout": latest_dividend_payout,
+            "cash": cash,
+        })
+
+    # Every point in a calendar year shows that year's complete dividend result. For the
+    # current/incomplete year, its last available row is naturally the closing value.
+    year_stats = {}
+    previous_dividends = 0.0
+    for row in series:
+        year = row["date"][:4]
+        stats = year_stats.setdefault(year, {"starting_dividends": previous_dividends})
+        stats["dividends"] = row["dividends"] - stats["starting_dividends"]
+        stats["closing_value"] = row["value"]
+        previous_dividends = row["dividends"]
+
+    for row in series:
+        year = row["date"][:4]
+        stats = year_stats[year]
+        row["dividend_year"] = year
+        row["annual_dividends"] = stats["dividends"]
+        row["annual_dividend_return"] = (
+            stats["dividends"] / stats["closing_value"] if stats["closing_value"] else 0.0
+        )
+        row["dividend_year_closing_value"] = stats["closing_value"]
 
     last_prices = dict(zip(tickers, price_rows[-1].tolist()))
     final_value = series[-1]["value"]
@@ -211,6 +259,8 @@ def backtest(
         "start_date": series[0]["date"],
         "end_date": series[-1]["date"],
         "invested": invested,
+        "initial_invested": initial_invested,
+        "periodic_invested": invested - initial_invested,
         "final_value": final_value,
         "gain": gain,
         "gain_pct": gain / invested if invested else None,
@@ -220,6 +270,11 @@ def backtest(
         "new_money_share": invested / final_value if final_value else None,
         "returned_share": gain / final_value if final_value else None,
         "max_drawdown": max_drawdown,
+        "max_drawdown_start": max_drawdown_start,
+        "max_drawdown_end": max_drawdown_end,
+        "max_absolute_drawdown": max_absolute_drawdown,
+        "max_absolute_drawdown_start": max_absolute_drawdown_start,
+        "max_absolute_drawdown_end": max_absolute_drawdown_end,
         "purchases": sum(buy["shares"] for item in investments for buy in item["buys"]),
     }
     holdings = [
@@ -242,7 +297,7 @@ def limiting_stock(first_days, start=None):
     for, as the same kind of string. If they asked for a start after that listing, nothing is cut short.
     """
     latest = first_days.max()
-    if latest > first_days.min() and (not start or start <= latest):
+    if (start and start < latest) or (not start and latest > first_days.min()):
         return first_days.idxmax(), latest
     return None
 
