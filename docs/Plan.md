@@ -17,13 +17,16 @@ Adressing: dividends? continuous investment (per month, net new money (NNM))
 
 share of new money to returned money
 
-
 Phase 2:
 
 Predictions - monte carlo modelling
 
+<<<<<<< HEAD
 Risk - dont know shit rn ( beta ? )
 
 Ideas:
 
 create a dividend adjuste curve for dividend stocks (i.e. revinvesting the profits once distributed)
+=======
+Risk - dont know shit rn ( beta ? )
+>>>>>>> 1bb3e02 (fixed typos)
