@@ -88,5 +88,11 @@ The backend upgrades the database to the newest schema when it starts (`init_db(
 3. `uv run alembic upgrade head` applies it now; the app also does this on start.
 4. Never edit a migration that has been applied. Add a new one instead.
 
+## Deploying
+Frontend on GitHub Pages, backend (Docker) on Render, Postgres on Neon.
+- Backend env vars: `DATABASE_URL` (a plain `postgresql://...?sslmode=require` URL works) and `FRONTEND_ORIGINS` (the Pages origin, e.g. `https://<user>.github.io`). Leave `DEV_TOOLS` unset. Build from `src/backend/Dockerfile`; the schema is created on first start.
+- Frontend: `.github/workflows/deploy-frontend.yml` builds on every push to `main`. Set the repo variable `VITE_API_URL` to the backend URL and Pages source to "GitHub Actions". `VITE_BASE` (`/racoon/` in the workflow) is the sub-path the site is served from; it defaults to `/` locally.
+- The API has no login, so anyone with the URL can use it.
+
 ## Tests
 `cd src/backend; uv run pytest`

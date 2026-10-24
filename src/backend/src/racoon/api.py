@@ -1,3 +1,4 @@
+import os
 import time
 from contextlib import asynccontextmanager
 from datetime import date
@@ -38,7 +39,16 @@ async def lifespan(app):
     yield
 
 
-FRONTEND_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]  # the Vite dev server
+DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]  # the Vite dev server
+
+
+def frontend_origins(extra=None):
+    """The dev origins plus any in FRONTEND_ORIGINS (comma-separated, e.g. https://user.github.io)."""
+    extra = os.environ.get("FRONTEND_ORIGINS", "") if extra is None else extra
+    return DEV_ORIGINS + [origin.strip().rstrip("/") for origin in extra.split(",") if origin.strip()]
+
+
+FRONTEND_ORIGINS = frontend_origins()
 ALLOWED_METHODS = ["GET", "POST", "PUT", "DELETE"]
 DEFAULT_INTERVAL = INTERVALS[0]
 

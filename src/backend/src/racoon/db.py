@@ -20,11 +20,20 @@ class Settings(BaseSettings):
     database_url: str
 
 
+def normalize_database_url(url):
+    """Hosts (Neon, Render) hand out postgresql://; SQLAlchemy would then look for psycopg2, which we don't use."""
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 @lru_cache
 def get_engine():
     """The one database handle, built from DATABASE_URL in .env."""
     return create_engine(
-        Settings().database_url, pool_size=10, max_overflow=10, pool_pre_ping=True, pool_recycle=1800
+        normalize_database_url(Settings().database_url),
+        pool_size=10, max_overflow=10, pool_pre_ping=True, pool_recycle=1800,
     )
 
 
